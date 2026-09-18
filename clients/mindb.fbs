@@ -1,0 +1,51 @@
+namespace mindb;
+
+table Vector {
+  id: string;
+  values: [float32];
+  payload: [ubyte];
+}
+
+table InsertRequest {
+  vectors: [Vector];
+}
+
+table InsertResponse {
+  inserted_count: int32;
+}
+
+table SearchRequest {
+  query_vector: [float32];
+  top_k: int32;
+}
+
+table SearchResult {
+  id: string;
+  score: float32;
+  payload: [ubyte];
+}
+
+table SearchResponse {
+  results: [SearchResult];
+}
+
+table DeleteRequest {
+  ids: [string];
+}
+
+table DeleteResponse {
+  deleted_count: int32;
+}
+
+table SnapshotRequest {}
+table SnapshotResponse {
+  success: bool;
+  message: string;
+}
+
+rpc_service VectorService {
+  Insert(InsertRequest): InsertResponse;
+  Search(SearchRequest): SearchResponse;
+  Delete(DeleteRequest): DeleteResponse;
+  Snapshot(SnapshotRequest): SnapshotResponse;
+}

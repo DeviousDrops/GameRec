@@ -1,0 +1,4 @@
+# Pinned to MinDB's Go flatbuffers version; flatc must match too (see clients/README.md).
+flatbuffers==25.12.19
+grpcio==1.84.0
+pytest==9.1.1
