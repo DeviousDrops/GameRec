@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets — never commit. deploy/k8s/secret.template.yaml is the tracked example.
+.env
+.env.*
+!.env.example
+*.secret.yaml
+deploy/k8s/secret.yaml
+
+# Local data
+data/
+*.mindb
+*.snapshot
+snapshots/
+
+# Agent tooling. .claude/ itself is tracked — shared config belongs in .claude/settings.json.
+# These are machine-local: a localhost base URL, absolute paths to local binaries, plugin scratch state.
+.claude/settings.local.json
+.claude/.headroom_*
+.serena/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Build
+bin/
+dist/
+build/
