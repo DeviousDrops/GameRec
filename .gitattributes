@@ -1,0 +1,7 @@
+# Normalise to LF in the repo. Shell scripts and Dockerfiles with CRLF fail
+# inside Linux containers, and this repo is developed on Windows.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.bin binary
