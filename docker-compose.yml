@@ -1,0 +1,43 @@
+# Local development stack. Production is k8s; see deploy/k8s.
+services:
+  mindb:
+    build:
+      context: deploy/dev
+      dockerfile: mindb.Dockerfile
+    command:
+      - "-addr=:50051"
+      - "-dims=384"          # bge-small-en-v1.5
+      - "-capacity=5000"     # dev only; production is 200000 (D21)
+      - "-snapshot=/data/mindb.snap"
+      - "-snapshot-interval=60s"
+    volumes:
+      - mindb-data:/data
+    ports:
+      - "50051:50051"
+    healthcheck:
+      # The server binds :50051 only after the snapshot has loaded, so a successful
+      # connection already means "data is ready". D-note: Phase 3 uses grpc.health.v1 on :50052.
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/dev/api.Dockerfile
+    environment:
+      MINDB_ADDR: mindb:50051
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      CORPUS_DIR: /corpus
+    volumes:
+      - ./data:/corpus:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      mindb:
+        condition: service_healthy
+
+volumes:
+  mindb-data:
