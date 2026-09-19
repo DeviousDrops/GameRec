@@ -5,12 +5,16 @@ import grpc
 
 from mindb.DeleteRequest import DeleteRequest
 from mindb.DeleteResponse import DeleteResponse
+from mindb.GetRequest import GetRequest
+from mindb.GetResponse import GetResponse
 from mindb.InsertRequest import InsertRequest
 from mindb.InsertResponse import InsertResponse
 from mindb.SearchRequest import SearchRequest
 from mindb.SearchResponse import SearchResponse
 from mindb.SnapshotRequest import SnapshotRequest
 from mindb.SnapshotResponse import SnapshotResponse
+from mindb.StatsRequest import StatsRequest
+from mindb.StatsResponse import StatsResponse
 
 
 class VectorServiceStub(object):
@@ -34,6 +38,12 @@ class VectorServiceStub(object):
 
     self.Snapshot = channel.unary_unary(
       method='/mindb.VectorService/Snapshot')
+
+    self.Get = channel.unary_unary(
+      method='/mindb.VectorService/Get')
+
+    self.Stats = channel.unary_unary(
+      method='/mindb.VectorService/Stats')
 
 
 class VectorServiceServicer(object):
@@ -59,6 +69,16 @@ class VectorServiceServicer(object):
     context.set_details('Method not implemented!')
     raise NotImplementedError('Method not implemented!')
 
+  def Get(self, request, context):
+    context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+    context.set_details('Method not implemented!')
+    raise NotImplementedError('Method not implemented!')
+
+  def Stats(self, request, context):
+    context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+    context.set_details('Method not implemented!')
+    raise NotImplementedError('Method not implemented!')
+
 
 def add_VectorServiceServicer_to_server(servicer, server):
   rpc_method_handlers = {
@@ -70,6 +90,10 @@ def add_VectorServiceServicer_to_server(servicer, server):
       servicer.Delete),
     'Snapshot': grpc.unary_unary_rpc_method_handler(
       servicer.Snapshot),
+    'Get': grpc.unary_unary_rpc_method_handler(
+      servicer.Get),
+    'Stats': grpc.unary_unary_rpc_method_handler(
+      servicer.Stats),
   }
 
   generic_handler = grpc.method_handlers_generic_handler(
