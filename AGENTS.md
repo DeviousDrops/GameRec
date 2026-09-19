@@ -1,7 +1,7 @@
 # GameRec
 
 RAG-based Steam game recommendation service, backed by [MinDB](https://github.com/typicallhavok/mindb)
-(an embedded LSM-style vector/storage engine in Go) over FlatBuffers-on-gRPC, deployed on
+(an embedded exact-kNN vector store in Go) over FlatBuffers-on-gRPC, deployed on
 single-VM k3s.
 
 ## Commits and authorship

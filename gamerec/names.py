@@ -11,7 +11,10 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import re
+
 from rapidfuzz import fuzz, process
+from rapidfuzz.utils import default_process
 
 IN_CORPUS = "in_corpus"
 FILTERED_LOW_REVIEWS = "filtered_low_reviews"
@@ -19,6 +22,33 @@ NOT_A_GAME = "not_a_game"
 PENDING_INGEST = "pending_ingest"
 
 MATCH_THRESHOLD = 90
+
+# rapidfuzz does no normalisation unless asked. Without this, "stardew valley" scores 85.7 against
+# "Stardew Valley" and "half life 2" scores 72.7 against "Half-Life 2" -- both rejected by the 90
+# threshold purely over case and punctuation. With it, both are 100. The threshold is meant to
+# measure how different the words are, not how the user capitalised them.
+#
+# Known limitation: a long subtitle still drags the score down ("DARK SOULS 2" against "DARK SOULS
+# II: Scholar of the First Sin" is 86.1), so those need the appid. Lowering the threshold is not the
+# fix -- it would start matching genuinely different games.
+_PROCESSOR = default_process
+
+# Sequel markers, in digits or roman numerals. A fuzzy scorer treats these as near-noise -- "Half-Life
+# 3" scores 90+ against "Half-Life", so asking for a game that does not exist would quietly return a
+# different one. In game titles the number is the most load-bearing token there is, so it is compared
+# exactly and the fuzzy score only decides the rest.
+_ROMAN = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9",
+          "x": "10", "xi": "11", "xii": "12", "xiii": "13"}
+
+
+def _sequel_markers(title: str) -> frozenset[str]:
+    markers = set()
+    for token in re.findall(r"[A-Za-z0-9]+", title.lower()):
+        if token.isdigit():
+            markers.add(token.lstrip("0") or "0")
+        elif token in _ROMAN:
+            markers.add(_ROMAN[token])
+    return frozenset(markers)
 
 _EXPLANATIONS = {
     FILTERED_LOW_REVIEWS: "it has too few reviews to be indexed",
@@ -71,10 +101,22 @@ class NameIndex:
             if entry is None:
                 return Resolution(None, f"appid {seed} is not in the Steam catalogue")
         else:
-            match = process.extractOne(
-                seed, self._choices, scorer=fuzz.WRatio, score_cutoff=MATCH_THRESHOLD
+            wanted = _sequel_markers(seed)
+            candidates = process.extract(
+                seed,
+                self._choices,
+                scorer=fuzz.WRatio,
+                processor=_PROCESSOR,
+                score_cutoff=MATCH_THRESHOLD,
+                limit=10,
             )
+            match = next((c for c in candidates if _sequel_markers(c[0]) == wanted), None)
             if match is None:
+                if candidates:
+                    near = self._by_appid[candidates[0][2]].name
+                    return Resolution(
+                        None, f"no game named {seed!r} -- the closest is {near}, which is not the same game"
+                    )
                 return Resolution(None, f"no game named {seed!r} (needs a {MATCH_THRESHOLD}% match)")
             entry = self._by_appid[match[2]]
 
