@@ -309,3 +309,41 @@ aimed at stopping someone running it as a service).
 matters here: there is nothing patentable, and a recruiter or engineer cloning this to look at it should
 hit the shortest, most familiar licence text there is. Apache-2.0 would be the right answer if MinDB
 were ever positioned as a product rather than a component of this one.
+
+### D25 — fastembed (ONNX) rather than sentence-transformers
+
+**Context:** The API embeds queries in-process (D3), on an Ampere A1 with ~4 GB of RAM shared with
+MinDB, the ingest job and k3s itself.
+**Options:** `sentence-transformers`, which pulls PyTorch; `fastembed`, which runs the same
+bge-small-en-v1.5 weights through ONNX Runtime; calling a hosted embedding API.
+**Choice:** fastembed. The model is baked into the image at build time rather than downloaded at
+startup, so a Hugging Face outage cannot stop a pod from becoming ready.
+**Trade-off:** fastembed exposes far less than sentence-transformers — no fine-tuning, no pooling
+control, a smaller model catalogue. None of that is needed here, and PyTorch would roughly triple the
+image and compete with MinDB for the memory the corpus lives in. A hosted API was rejected because it
+puts a network call on the hot path of every single query.
+
+### D26 — Sequel numbers are matched exactly, not fuzzily
+
+**Context:** `seed=Half-Life 3` resolved to *Half-Life*. rapidfuzz scores that pair 95, comfortably
+over the ≥90 threshold, so a game that does not exist silently became a different game — destroying
+the one thing the name index is for (ADR-0004).
+**Options:** Raise the threshold, which breaks real typos; use a stricter scorer, which has the same
+problem in a different place; treat the sequel number as structure rather than text.
+**Choice:** Extract sequel markers (digits and roman numerals) from both strings and require them to
+be equal; the fuzzy score only ranks what is left. "II" and "2" are the same marker.
+**Trade-off:** A title whose number is incidental rather than a sequel marker (*Left 4 Dead*, *Portal
+2*, *7 Days to Die*) now needs that number typed correctly. That is a much smaller harm than
+confidently recommending the wrong game, and the appid always bypasses it.
+
+### D27 — rapidfuzz gets an explicit processor
+
+**Context:** rapidfuzz does no normalisation by default. `"stardew valley"` scored **85.7** against
+`"Stardew Valley"` and was rejected by the ≥90 rule; `"half life 2"` scored **72.7** against
+`"Half-Life 2"`. Ordinary lowercase typing was failing.
+**Options:** Lower the threshold to absorb the penalty; normalise the text before scoring.
+**Choice:** Pass `rapidfuzz.utils.default_process`, which case-folds and strips punctuation. Both
+examples become 100, and the ≥90 threshold keeps its intended meaning: how different the *words* are.
+**Trade-off:** A long subtitle can still fall below 90 — `"DARK SOULS 2"` against *DARK SOULS II:
+Scholar of the First Sin* is 86.1. Lowering the threshold to catch it would start matching genuinely
+different games, so that case is left to the appid and documented as a known limitation.
