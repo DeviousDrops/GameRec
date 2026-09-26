@@ -382,3 +382,74 @@ sidecar is built.
 **Verified against the published image**, not assumed: `tests/test_flatbuffers_codec.py` passes against
 it, and `Stats` reports `dims=384 capacity=5000 kernel_name=avx2 fast_int8=true wal_enabled=true
 wal_healthy=true`.
+
+### D29 — Resumption trusts the union of the corpus and the checkpoint
+
+**Context:** Two files on disk record what has been ingested: `documents.jsonl`, which is what actually
+exists (D9), and `checkpoint.json`, which is what a run claimed. They can disagree, because a run that
+dies between appending a batch and writing the checkpoint leaves the corpus ahead of the claim.
+**Options:** (a) the checkpoint is authoritative and the corpus is ignored; (b) derive the seen set from
+the corpus each run and drop the checkpoint's appid set; (c) start from the union of both.
+**Choice:** (c) — `checkpoint.appids |= store.appids()` before planning. The checkpoint keeps its own
+set because it records appids that have *no* document: a game that failed the review floor or is not a
+game at all was still looked at, and under (b) those would be re-fetched on every run forever.
+**Trade-off:** The union can only over-claim relative to the corpus, never under-claim, and over-claiming
+costs a refresh that D15's cap already bounds. The reverse error is the expensive one — an appid dropped
+from both records is a hole nothing later fills, because nothing knows it is missing. Resumption
+therefore reads any checkpoint, `PENDING` or `COMPLETE`; only *restore* insists on `COMPLETE`, since
+that is the case where a checkpoint claiming more than its snapshot holds does real damage (ADR-0002).
+
+### D30 — Pacing is a token bucket, and a throttle does not spend the retry budget
+
+**Context:** D17 fixed the request rate as a per-process budget but not its mechanism. The first
+implementation slept a fixed interval between fetches, which is a rate limit only if every request
+costs the same and none of them fail.
+**Options:** (a) fixed sleep; (b) a token bucket sized by requests-per-minute with a small burst;
+(c) adaptive pacing that reads Steam's rate-limit headers.
+**Choice:** (b). One bucket for the whole run, so `fetch_popular` and every `fetch_details` draw from
+the same budget instead of each pacing itself correctly and jointly overrunning. Defaults are 35
+requests per minute against the ~40/minute D17 measured, burst 5. A 429 empties the bucket and sleeps a
+jittered 20–30s.
+**Trade-off:** (c) needs headers Steam does not document and would silently stop working if they change
+shape; a bucket is wrong in a knowable direction instead. The subtlety is in the accounting: a request
+that has to wait still *charges* its token and waits off the debt, because zeroing the balance instead
+hands the next caller a free token and halves the effective rate. Retries are budgeted separately from
+throttles — being rate-limited is not evidence that a game cannot be fetched, and spending the failure
+budget on it is how a busy afternoon turns into missing games.
+
+### D31 — Ingest refuses to mix embedding models; the template may mix
+
+**Context:** Vectors from two different models in one index are not comparable, and nothing about the
+resulting recommendations looks wrong. The checkpoint already carries the Model Stamp and the template
+version (D9), so a mismatch is detectable before the first request.
+**Options:** (a) trust the operator; (b) refuse on any change to either field; (c) refuse on a model
+change, warn on a template change.
+**Choice:** (c). A model change exits non-zero naming `python -m ingest.reindex`, which rebuilds every
+vector from the documents already on disk without touching Steam — the concrete payoff of the
+derived-index stance in D13/ADR-0003. A template change only warns, because D22 plans exactly that
+transition and a corpus rendered at mixed template versions is a documented intermediate state, not a
+fault.
+**Trade-off:** (b) is simpler and would block the v1→v2 rollout D22 already committed to. The guard is
+also only as good as the stamp: it catches a changed model, not a changed model that kept its name, so
+the stamp includes the dimension count and `Stats.dims` is checked against a live probe embedding on
+every run as a second, cheaper net.
+
+### D32 — `appdetails` is unwrapped by `data.steam_appid`, not by the envelope key
+
+**Context:** A live run recorded Terraria, ELDEN RING, Counter-Strike and five other unmistakable games
+as `not_a_game`. Nothing errored and nothing logged. `appdetails` does not always key its response by
+the appid that was asked for — 105600 comes back under `"1323320"` — so a lookup by the requested key
+missed the payload, and the absence of a payload was read as a verdict.
+**Options:** (a) index by the requested appid and treat a miss as "not a game"; (b) take the only entry
+in a single-entry envelope and verify `data.steam_appid`; (c) ignore the appid in the response entirely
+and trust whatever came back.
+**Choice:** (b). A multi-entry envelope is refused rather than guessed at, and data whose `steam_appid`
+is some other game is refused outright — storing it would be wrong in a way nothing downstream could
+detect, because the document would be internally consistent and simply about the wrong game.
+**Trade-off:** This is a bug fix, but it is recorded here for the second half, which is a design
+position: `fetch_details` previously returned `None` both for "Steam said no" and for "Steam never
+answered", and the caller could only read that as the former. It now raises `FetchFailed` when the
+attempts run out, and the run records those appids as `pending_ingest` and leaves them out of the
+checkpoint. **A verdict is permanent; an outage is not**, and any code path that can turn the second
+into the first will eventually be given the chance. The cost is that a genuinely unreachable appid is
+retried every run, which is cheap and visible, unlike a permanent mislabel.

@@ -70,7 +70,7 @@ reason — "*Half-Life 3* hasn't been ingested yet" beats a bare "not found".
 
 ## Status
 
-**Phase 1 — local pipeline.** See [DECISIONS.md](DECISIONS.md) for the reasoning behind every
+**Phase 2 — ingest hardening.** See [DECISIONS.md](DECISIONS.md) for the reasoning behind every
 non-obvious choice, [CONTEXT.md](CONTEXT.md) for the vocabulary, and [docs/adr/](docs/adr/) for the
 decisions that were hard to reverse.
 
@@ -78,7 +78,7 @@ decisions that were hard to reverse.
 |---|---|
 | 0 · Plan | done — MinDB API surface mapped, design settled |
 | 1 · Local pipeline | done — ingest, search and narration working against the released MinDB image |
-| 2 · Ingest hardening | idempotency, checkpoint, rate limits, model-version checks |
+| 2 · Ingest hardening | done — resumable, idempotent, paced and bounded, with a model-stamp guard |
 | 3 · Containerise + k8s | manifests on local k3d |
 | 4 · CI + VM deploy | GitHub Actions, k3s bootstrap, backups |
 | 5 · Polish | benchmarks, failure modes |
@@ -112,8 +112,17 @@ decisions that were hard to reverse.
 Requires Docker and Python 3.13. Configuration is environment variables; secrets never live in the repo.
 
 ```bash
-docker compose up        # MinDB + API locally
+docker compose up                 # MinDB + API locally
+python -m ingest.run --limit 200  # fetch, embed and upsert a popularity-ordered slice
+python -m ingest.reindex          # rebuild every vector from documents.jsonl, no Steam requests
+pytest -q                         # unit tests; the codec test needs MinDB up
 ```
+
+`ingest.run` is safe to interrupt and safe to rerun. It resumes from `data/checkpoint.json`, paces
+itself against Steam, and takes new appids before refreshes, so a stop halfway never costs the games
+it had not reached yet. It refuses to run at all if the checkpoint was written by a different
+embedding model — `ingest.reindex --compact` is the way out of that, and it rebuilds from the
+documents already on disk rather than re-fetching from Steam.
 
 ## Licence
 
