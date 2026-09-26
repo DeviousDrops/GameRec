@@ -96,8 +96,10 @@ sed -i 's/game-rec.duckdns.org/<your host>/' deploy/k8s/50-ingress.yaml
 
 ```
 sudo apt-get install -y git
-sudo git clone https://github.com/DeviousDrops/GameRec /root/GameRec
-cd /root/GameRec
+# Anywhere readable by root will do; bootstrap.sh locates the repo from its own path. Note where
+# it goes, because the TLS deploy hook below is an absolute path into this clone.
+git clone https://github.com/DeviousDrops/GameRec ~/GameRec
+cd ~/GameRec
 
 # the namespace first: the Secret goes in it, and bootstrap.sh will not invent a Secret
 kubectl apply -f deploy/k8s/00-namespace.yaml
@@ -156,14 +158,39 @@ host (D40).
 
 ```
 sudo apt-get install -y certbot
-sudo systemctl stop k3s              # standalone mode needs port 80, which Traefik is holding
-sudo certbot certonly --standalone -d <your host> \
-  --deploy-hook '/root/GameRec/deploy/vm/tls-secret.sh <your host>'
+
+# Port 80 has to be genuinely free, and stopping k3s is not enough on its own. k3s leaves the pods
+# and their iptables rules behind, so the hostPort DNAT that sends :80 to Traefik outlives the stop:
+# certbot binds the port, reports success, and never sees the challenge arrive.
+sudo systemctl stop k3s
+sudo /usr/local/bin/k3s-killall.sh
+sudo ss -lntp | grep -E ':80 |:443 ' || echo "80/443 free"
+
+# Staging first. Let's Encrypt allows five failures an hour per hostname, and the challenge path
+# depends on DNS, an NSG rule and the port check above — none of it proven until this passes.
+sudo certbot certonly --standalone --dry-run -d <your host>
+
+# Then for real, non-interactively on purpose: the account --dry-run registered exists only on the
+# staging server, so this asks for an email again, and a command pasted after it is read as the
+# answer. The hook path has to be wherever the repo is actually cloned.
+sudo certbot certonly --standalone -n --agree-tos --no-eff-email -m <your email> -d <your host> \
+  --deploy-hook '<repo>/deploy/vm/tls-secret.sh <your host>'
+
 sudo systemctl start k3s
+sudo <repo>/deploy/vm/tls-secret.sh <your host>   # the hook could not run; see below
 ```
+
+The deploy hook fails on that first issuance, and it is meant to. It calls kubectl, and k3s is stopped
+so that certbot can have port 80, so there is no API server to write the Secret to. The certificate is
+issued and saved regardless; the last line copies it in once k3s is back. Registering the hook anyway
+is the whole point of it — every renewal after this one runs unattended, with k3s up.
 
 certbot's own systemd timer handles renewal from then on, and the hook keeps the Secret in step.
 Without the Secret, Traefik serves its self-signed default — a browser warning, not an outage.
+
+Get the hook's path wrong and nothing says so: issuance succeeds, the Secret is right because it was
+copied in by hand, and renewal quietly stops updating it in 60 days. The path is recorded in
+`/etc/letsencrypt/renewal/<your host>.conf`, which is where to check it.
 
 ## Checking that backups are real
 
