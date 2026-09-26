@@ -45,6 +45,23 @@ jobs:
         if: failure()
         run: docker logs mindb
 
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The operational scripts are the least-run code in the repo -- bootstrap.sh runs once per VM,
+      # the TLS hook every 60 days -- so a typo in one surfaces at the worst possible moment. Nothing
+      # here executes them; shellcheck reads them. It ships with the runner image.
+      - name: shellcheck
+        run: shellcheck deploy/vm/*.sh
+
+      # They are documented as `./deploy/vm/bootstrap.sh`, which only works if git recorded the mode.
+      - name: The scripts are executable
+        run: |
+          for script in deploy/vm/*.sh; do
+            test -x "${script}" || { echo "${script} is not executable"; exit 1; }
+          done
+
   image:
     runs-on: ubuntu-latest
     steps:
