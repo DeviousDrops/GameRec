@@ -98,7 +98,9 @@ spec:
               cpu: 200m
             limits:
               memory: 1200Mi
-              cpu: "2"
+              # Not "2": that is the whole node (D47), and a Search allowed to saturate both vCPU
+              # starves the API pod that is waiting on the answer.
+              cpu: "1500m"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

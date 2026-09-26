@@ -30,21 +30,32 @@ lands.
 
 ## Sizing
 
-The A1 always-free shape is 4 OCPU / 24 GB, which is far more than this needs; the numbers matter
-anyway because they say what a *smaller* box would break first.
+4 GiB and 2 burstable vCPU, which is tight rather than comfortable. These numbers are why the API runs
+one replica and not two (D47):
 
 | | requests | limits |
 |---|---|---|
 | mindb | 700Mi | 1200Mi |
 | backup sidecar | 450Mi | 700Mi |
-| gamerec-api ×2 | 1000Mi | 1800Mi |
+| gamerec-api ×1 | 500Mi | 900Mi |
 | ingest CronJob (nightly) | 600Mi | 1Gi |
-| k3s itself (traefik, coredns, metrics-server, local-path) | ~500Mi | — |
+| k3s itself (traefik, coredns, local-path) | ~250Mi | — |
 
-So ~3.3 GB of requests during the nightly ingest window. 4 GB is not enough once the ingest overlaps
-a snapshot; 8 GB is comfortable. MinDB's request is what it genuinely reserves at boot — 200,000 ×
-384 × 4 B for the float32 store plus the int8 cascade copy — not a guess, so it is the one number that
-cannot be trimmed without lowering `-capacity`.
+~1.9 GiB of requests at rest and ~2.5 GiB while the nightly ingest runs, against 4 GiB with the OS and
+k3s inside it. Headroom, but not much: the two things that can spike together are the sidecar holding a
+whole snapshot in memory to upload it and an ingest embedding a batch. metrics-server is disabled in
+`bootstrap.sh` for the same reason — nothing here autoscales, so it would be ~100Mi spent on a graph.
+
+MinDB's request is what it genuinely reserves at boot — 200,000 × 384 × 4 B for the float32 store plus
+the int8 cascade copy — not a guess, so it is the one number that cannot be trimmed without lowering
+`-capacity`. Worth knowing before that trade comes up: the corpus after the Scope Filter is far smaller
+than 200,000, so capacity could come down to ~120,000 and save ~150 MB, at the cost of a restart the
+day the catalogue outgrows it.
+
+CPU is a credit balance on a B-series, not a constant. The paced ingest barely touches it — 35 Steam
+requests a minute leaves both vCPU idle between fetches — but `ingest.reindex` embeds ~176k documents
+back to back, and once credits are gone it runs at the baseline share. Plan a reindex as hours, not
+the ~20 minutes the benchmark CPU would suggest.
 
 This host is x86_64, so MinDB selects its AVX2 int8 kernel rather than the pure-Go fallback — `/health`
 reports which, and every benchmark this project quotes carries that label (ADR-0006, D46).

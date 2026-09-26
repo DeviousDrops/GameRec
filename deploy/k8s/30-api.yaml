@@ -10,9 +10,11 @@ metadata:
     app.kubernetes.io/part-of: gamerec
     app.kubernetes.io/component: api
 spec:
-  # Two, so an API rollout is not downtime. MinDB's restart is unavoidable downtime (D7); the API's
-  # is not, and paying for it would be a choice.
-  replicas: 2
+  # One. Two was for availability that a single node cannot provide anyway, and each replica holds its
+  # own copy of the ONNX model -- ~350 MB of a 4 GiB host to insure against a failure mode that takes
+  # the node with it (D47). maxSurge keeps a rollout from being downtime: the new pod starts, passes
+  # /readyz, and only then does the old one go.
+  replicas: 1
   strategy:
     rollingUpdate:
       maxUnavailable: 0
@@ -84,6 +86,8 @@ spec:
               cpu: 100m
             limits:
               memory: 900Mi
+              # Half the box. The node has 2 vCPU, and an embedding burst that takes both of them
+              # starves MinDB, which is the thing the embedding is about to call.
               cpu: "1"
           securityContext:
             allowPrivilegeEscalation: false

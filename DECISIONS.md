@@ -671,3 +671,19 @@ and 2 burstable vCPU means sustained CPU is a credit balance rather than a const
 barely notices (35 requests a minute leaves the CPU idle between fetches), while a full reindex is
 ~176k embeddings back to back and will run on baseline once credits are gone. (a) was waiting for
 hardware that may never free up; (c) buys headroom this workload has not yet shown it needs.
+
+### D47 — One API replica, and CPU limits that fit the box
+
+**Context:** The manifests were written for a 24 GB host: two API replicas, and CPU limits of `2` on
+MinDB. The host has 4 GiB and 2 burstable vCPU (D46).
+**Options:** (a) keep two replicas and let the kernel sort it out; (b) one replica; (c) two replicas
+with the memory requests halved so they fit on paper.
+**Choice:** (b), plus MinDB's CPU limit cut from `2` to `1500m`. `maxSurge: 1` stays, so a rollout is
+still not downtime -- the new pod passes `/readyz` before the old one goes.
+**Trade-off:** two replicas bought nothing here. They were never availability: one node means one
+kernel, one kubelet and one power button, and a second pod does not survive any of those failing. What
+they did buy was ~350 MB of resident ONNX model each, on a host where the sidecar can be holding a
+310 MB snapshot in memory while an ingest embeds a batch. (c) is the worst of both: requests that lie
+about what a pod needs produce an OOM kill under exactly the load the numbers were meant to survive.
+The CPU limit matters for a different reason -- a limit of `2` on a 2-vCPU node is no limit at all, so
+a Search could take both cores from the API pod that is waiting on its answer.
