@@ -90,6 +90,28 @@ class NameIndex:
             json.dumps([e.__dict__ for e in entries], separators=(",", ":")), encoding="utf-8"
         )
 
+    @staticmethod
+    def merge(path: Path, entries: list[NameEntry]) -> int:
+        """Fold a run's entries into the file on disk, newest winning. Returns the resulting size.
+
+        A resumable fill (D14) sees a slice of the catalogue per run, so writing only what this run
+        saw would shrink the index every time -- and the index is what lets a miss explain itself for
+        games that are *not* in the corpus. Newest wins because a status can legitimately change: a
+        game that was pending_ingest becomes in_corpus, and one that leaves early access can start
+        failing the review floor.
+        """
+        path = Path(path)
+        merged: dict[int, NameEntry] = {}
+        try:
+            for raw in json.loads(path.read_text(encoding="utf-8")):
+                merged[int(raw["appid"])] = NameEntry(**raw)
+        except FileNotFoundError:
+            pass
+        for entry in entries:
+            merged[entry.appid] = entry
+        NameIndex.dump(list(merged.values()), path)
+        return len(merged)
+
     def __len__(self) -> int:
         return len(self._by_appid)
 
