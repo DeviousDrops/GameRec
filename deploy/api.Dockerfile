@@ -1,4 +1,10 @@
+# One image for the whole service: the API serves from it, and the initial fill and the nightly
+# ingest run `python -m ingest.run` out of the same layers. Two images would be two chances for
+# them to disagree about the embedding model or the render template, which is the disagreement
+# nothing downstream can detect (D31).
 FROM python:3.13-slim
+
+LABEL org.opencontainers.image.source="https://github.com/DeviousDrops/GameRec"
 
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1

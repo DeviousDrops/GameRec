@@ -24,7 +24,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: deploy/dev/api.Dockerfile
+      dockerfile: deploy/api.Dockerfile
     environment:
       MINDB_ADDR: mindb:50051
       GROQ_API_KEY: ${GROQ_API_KEY:-}
