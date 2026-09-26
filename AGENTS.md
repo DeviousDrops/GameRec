@@ -1,6 +1,6 @@
 # GameRec
 
-RAG-based Steam game recommendation service, backed by [MinDB](https://github.com/typicallhavok/mindb)
+RAG-based Steam game recommendation service, backed by [MinDB](https://github.com/DeviousDrops/mindb)
 (an embedded exact-kNN vector store in Go) over FlatBuffers-on-gRPC, deployed on
 single-VM k3s.
 

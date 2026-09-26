@@ -3,7 +3,7 @@
 A RAG-based Steam game recommendation service. Describe what you feel like playing — or name a game you
 liked — and it returns games from the corpus, with a short explanation of why each one fits.
 
-The vector backend is [MinDB](https://github.com/typicallhavok/mindb), an embedded exact-kNN store
+The vector backend is [MinDB](https://github.com/DeviousDrops/mindb), an embedded exact-kNN store
 written in Go: one flat in-memory slab of vectors with an id map, a free list for reuse, and whole-file
 snapshots for durability. GameRec talks to it over FlatBuffers-on-gRPC. Everything runs on a single ARM
 VM under k3s.
@@ -12,12 +12,12 @@ VM under k3s.
 >
 > **MinDB holds no data that is not reproducible from R2.**
 >
-> MinDB does not yet have a write-ahead log — one is in flight upstream — so it is treated as a
-> *derived index*: the source of truth is the Game Document Store in object storage, and recovery is the
-> last backup generation plus an idempotent re-ingest. **The rule holds regardless.** A WAL improves
-> MinDB's own crash durability; it does not make MinDB the source of truth, and it does not repeal this
-> rule. If anything ever becomes MinDB-only, the rule is void and durability must be revisited before
-> that change ships. See [ADR-0003](docs/adr/0003-mindb-is-a-derived-index.md).
+> MinDB is treated as a *derived index*: the source of truth is the Game Document Store in object
+> storage, and recovery is the last backup generation plus an idempotent re-ingest. MinDB gained a
+> write-ahead log in `v0.1.0`, and **the rule holds regardless.** A WAL improves MinDB's own crash
+> durability; it does not make MinDB the source of truth, and it does not repeal this rule. If anything
+> ever becomes MinDB-only, the rule is void and durability must be revisited before that change ships.
+> See [ADR-0003](docs/adr/0003-mindb-is-a-derived-index.md).
 
 ## Architecture
 
@@ -77,7 +77,7 @@ decisions that were hard to reverse.
 | Phase | |
 |---|---|
 | 0 · Plan | done — MinDB API surface mapped, design settled |
-| 1 · Local pipeline | in progress |
+| 1 · Local pipeline | done — ingest, search and narration working against the released MinDB image |
 | 2 · Ingest hardening | idempotency, checkpoint, rate limits, model-version checks |
 | 3 · Containerise + k8s | manifests on local k3d |
 | 4 · CI + VM deploy | GitHub Actions, k3s bootstrap, backups |
@@ -101,9 +101,11 @@ decisions that were hard to reverse.
   same code. `/health` reports the kernel MinDB actually selected — `pure-go` on the ARM VM, `avx2` on
   an x86 dev box — so every published number can be tied to a kernel rather than an assumption.
   ([ADR-0006](docs/adr/0006-arm64-host-and-architecture-labelled-benchmarks.md))
-- **MinDB is consumed, not vendored.** It is pinned to a released tag and pulled as a multi-arch
-  (`linux/amd64` + `linux/arm64`) image from GHCR, so the same tag runs on a dev laptop and on the
-  Ampere VM. MinDB's own source, Dockerfile and CI live in its repo and are not modified from here.
+- **MinDB is consumed, not vendored.** The dev stack and every deployment run
+  `ghcr.io/deviousdrops/mindb:v0.1.0` — a released tag, never `latest`, built multi-arch for
+  `linux/amd64` and `linux/arm64`, so the same tag runs on a dev laptop and on the Ampere VM. MinDB's
+  own source, Dockerfile and CI live in its repo and are not modified from here. The FlatBuffers schema
+  in `clients/` is pinned to the same tag (see [clients/README.md](clients/README.md)).
 
 ## Development
 
