@@ -29,6 +29,16 @@ class Config:
     # Snapshot cadence bounds how much work a crash destroys (D7).
     snapshot_every_batches: int = int(os.environ.get("SNAPSHOT_EVERY_BATCHES", "10"))
 
+    # Object storage (D20). Unset in local development, in which case the ingest runs without the
+    # lease and says so rather than refusing to start.
+    r2_endpoint: str = os.environ.get("R2_ENDPOINT", "")
+    r2_bucket: str = os.environ.get("R2_BUCKET", "")
+    r2_access_key_id: str = os.environ.get("R2_ACCESS_KEY_ID", "")
+    r2_secret_access_key: str = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+    # Comfortably longer than a batch takes at the configured request rate, so a run renews long
+    # before it expires; short enough that a dead pod does not block tomorrow night (D17).
+    ingest_lease_ttl: float = float(os.environ.get("INGEST_LEASE_TTL", "1800"))
+
     @property
     def documents_path(self) -> Path:
         return self.corpus_dir / "documents.jsonl"

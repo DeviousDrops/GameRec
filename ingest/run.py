@@ -13,9 +13,10 @@ Hardened per Phase 2. The properties that hold, and why each one is load-bearing
     honest         The checkpoint is marked complete only after Snapshot succeeds, so a restore never
                    pairs a snapshot with a checkpoint claiming more than it holds (ADR-0002).
 
-The Ingest Lease that makes "one ingest at a time" enforceable rather than conventional (D17) needs
-object storage, so it lands with R2 in Phase 4. Until then two concurrent runs would each pace
-correctly and jointly exceed the budget.
+    exclusive      A lease in object storage, renewed at every batch boundary, so a manual run
+                   started beside the CronJob exits instead of doubling the request rate (D17, D20).
+                   With no object storage configured the run says so and proceeds -- that is a
+                   developer running locally, not a second scheduled ingest.
 """
 
 from __future__ import annotations
@@ -26,11 +27,13 @@ import sys
 
 import httpx
 
+from gamerec import objectstore
 from gamerec.checkpoint import Checkpoint
 from gamerec.config import Config
 from gamerec.corpus import CorpusStore
 from gamerec.documents import TEMPLATE_VERSION, GameDocument
 from gamerec.embeddings import Embedder
+from gamerec.lease import LeaseHeld, acquire
 from gamerec.mindb import MinDBClient
 from gamerec.names import (
     FILTERED_LOW_REVIEWS, IN_CORPUS, NOT_A_GAME, PENDING_INGEST, NameEntry, NameIndex,
@@ -118,6 +121,28 @@ def main() -> int:
         log.error("%s", mismatch)
         return 1
 
+    store_r2 = objectstore.from_config(config)
+    if store_r2 is None:
+        log.warning("no object storage configured: running without the ingest lease. Two concurrent "
+                    "runs would each pace correctly and jointly exceed Steam's budget (D17).")
+        lease = None
+    else:
+        try:
+            lease = acquire(store_r2, ttl=config.ingest_lease_ttl)
+        except LeaseHeld as held:
+            # Exit 0, not 1. Another ingest running is the lease working, and a CronJob that reports
+            # failure every time it correctly declines to run teaches everyone to ignore it.
+            log.info("%s", held)
+            return 0
+
+    try:
+        return _run(args, config, embedder, current, recorded, lease)
+    finally:
+        if lease is not None:
+            lease.release()
+
+
+def _run(args, config, embedder, current, recorded, lease) -> int:
     client = MinDBClient(config.mindb_addr)
     client.wait_ready()
     stats = client.stats()
@@ -174,6 +199,12 @@ def main() -> int:
             if batch_number % config.snapshot_every_batches == 0:
                 ok, message = client.snapshot()
                 log.info("snapshot ok=%s %s", ok, message)
+
+            # Renewed per batch rather than on a timer: a batch is the unit of work that already
+            # ends with durable state, so a lease lost here costs nothing that is not on disk.
+            if lease is not None and not lease.renew():
+                log.error("lost the ingest lease mid-run; stopping after this batch")
+                break
 
     ok, message = client.snapshot()
     log.info("final snapshot ok=%s %s", ok, message)
