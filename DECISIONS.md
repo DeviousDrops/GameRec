@@ -637,3 +637,20 @@ both and mark which is which.
 trust as a tested one, and the disk-full and node-reboot entries here are guesses about a VM that does
 not exist yet. (b) would leave the failures most likely to happen unwritten, since they are precisely
 the ones hardest to stage. The cost of (c) is a runbook that admits its own gaps, which is the point.
+
+## The host, revised
+
+### D45 — The API image is amd64 only, and that is reversible
+
+**Context:** `release.yml` built `linux/amd64,linux/arm64` because the deploy host was going to be an
+Ampere A1 (D23). The host is an Azure `Standard_B2als_v2`, which is x86_64, and there is no ARM
+hardware in the picture now.
+**Options:** (a) keep both platforms; (b) amd64 only; (c) amd64 now and a separate arm64 tag if ARM
+hardware ever appears.
+**Choice:** (b), stated in the workflow as reversible: one `platforms:` line plus
+`docker/setup-qemu-action` brings arm64 back.
+**Trade-off:** (a) costs a QEMU cross-build on every release that nothing pulls -- the arm64 leg is
+the slow one by a wide margin, and a slow release is a release people avoid cutting. The thing (a)
+buys is a guarantee that the arm64 build still works, which matters when there is an arm64 machine to
+run it on and not before. MinDB stays multi-arch: it is Go, it cross-compiles rather than emulating,
+and it is a separate repo with its own reasons.
