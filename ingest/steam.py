@@ -28,6 +28,12 @@ APPDETAILS = "https://store.steampowered.com/api/appdetails"
 DEFAULT_DELAY = 1.6
 
 
+class FetchFailed(RuntimeError):
+    """Steam never answered. Distinct from "answered, and has nothing for this appid" -- one is worth
+    retrying on the next run, the other is a verdict, and recording the wrong one is how a real game
+    ends up permanently labelled not_a_game."""
+
+
 @dataclass
 class Popular:
     appid: int
@@ -84,16 +90,40 @@ def fetch_details(
                     time.sleep(random.uniform(*RATE_LIMIT_BACKOFF))
                 continue
             response.raise_for_status()
-            body = response.json().get(str(appid)) or {}
-            return body.get("data") if body.get("success") else None
+            return _unwrap(appid, response.json() or {})
         except (httpx.HTTPError, ValueError) as exc:
             failures += 1
             if failures >= attempts:
-                log.warning("appid %s failed after %d attempts: %s", appid, attempts, exc)
-                return None
+                raise FetchFailed(f"appid {appid} failed after {attempts} attempts: {exc}") from exc
             # Exponential backoff with jitter, so a burst of failures does not resynchronise.
             delay = (2 ** (failures - 1)) + random.uniform(0, 1)
             log.info("appid %s: %s; retrying in %.1fs", appid, exc, delay)
             time.sleep(delay)
-    log.warning("appid %s: gave up after %d rate limits", appid, throttles)
-    return None
+    raise FetchFailed(f"appid {appid}: gave up after {throttles} rate limits")
+
+
+def _unwrap(appid: int, body: dict) -> dict | None:
+    """Pull the `data` block out of an appdetails response, or None if Steam has nothing for it.
+
+    The envelope is not keyed by the appid that was asked for. Requesting 105600 (Terraria) comes back
+    under "1323320"; the id is stable per app but unrelated to the request, and indexing by the
+    requested appid therefore missed the payload entirely and read as "not a game" -- which is how
+    Terraria, ELDEN RING and Counter-Strike all got filtered out of a corpus they belong in.
+
+    `data.steam_appid` is the authoritative one, so it is what gets checked. A genuine miss keys by
+    the requested appid with `success: false`.
+    """
+    entry = body.get(str(appid))
+    if entry is None and len(body) == 1:
+        entry = next(iter(body.values()))
+    if not isinstance(entry, dict) or not entry.get("success"):
+        return None
+
+    data = entry.get("data") or {}
+    returned = data.get("steam_appid")
+    if returned is not None and int(returned) != appid:
+        # Storing one game's document under another's appid would be wrong in a way nothing
+        # downstream could detect, so this is dropped rather than guessed at.
+        log.warning("appid %s: appdetails answered with steam_appid %s; ignoring", appid, returned)
+        return None
+    return data

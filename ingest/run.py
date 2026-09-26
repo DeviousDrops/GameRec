@@ -33,10 +33,10 @@ from gamerec.documents import TEMPLATE_VERSION, GameDocument
 from gamerec.embeddings import Embedder
 from gamerec.mindb import MinDBClient
 from gamerec.names import (
-    FILTERED_LOW_REVIEWS, IN_CORPUS, NOT_A_GAME, NameEntry, NameIndex,
+    FILTERED_LOW_REVIEWS, IN_CORPUS, NOT_A_GAME, PENDING_INGEST, NameEntry, NameIndex,
 )
 from gamerec.stamp import Stamp, StampMismatch, assert_ingestable
-from ingest.steam import Popular, fetch_details, fetch_popular
+from ingest.steam import FetchFailed, Popular, fetch_details, fetch_popular
 from ingest.throttle import RateLimiter
 
 log = logging.getLogger("ingest")
@@ -66,11 +66,20 @@ def fetch_one(
 
     The review floor is applied before the fetch because SteamSpy supplies the count -- that is the
     one filter that saves a request rather than only saving index space (D4).
+
+    A fetch that never got an answer comes back PENDING_INGEST, not NOT_A_GAME. The statuses read the
+    same to a caller -- both mean "no document" -- but one is a verdict and the other is a retry, and
+    the caller uses that to decide whether the appid goes into the checkpoint.
     """
     if popular.review_count < review_floor:
         return None, NameEntry(popular.appid, popular.name, FILTERED_LOW_REVIEWS)
 
-    details = fetch_details(popular.appid, client, limiter=limiter)
+    try:
+        details = fetch_details(popular.appid, client, limiter=limiter)
+    except FetchFailed as failed:
+        log.warning("%s; will retry next run", failed)
+        return None, NameEntry(popular.appid, popular.name, PENDING_INGEST)
+
     if details is None or details.get("type") != "game":
         return None, NameEntry(popular.appid, popular.name, NOT_A_GAME)
 
@@ -156,7 +165,12 @@ def main() -> int:
                 log.info("upserted %d vectors", upserted)
 
             # Claimed before the snapshot, so the checkpoint can only ever lag it (ADR-0002).
-            checkpoint.mark_pending(config.checkpoint_path, {p.appid for p in batch})
+            # Appids Steam never answered for are left out, so the next run retries them instead of
+            # treating an outage as a permanent verdict.
+            settled = {e.appid for e in entries if e.status != PENDING_INGEST}
+            checkpoint.mark_pending(config.checkpoint_path, settled)
+            if len(settled) < len(entries):
+                log.info("%d appids unresolved this run", len(entries) - len(settled))
             if batch_number % config.snapshot_every_batches == 0:
                 ok, message = client.snapshot()
                 log.info("snapshot ok=%s %s", ok, message)
