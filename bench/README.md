@@ -2,8 +2,9 @@
 
 Every number here is labelled with the architecture and the kernel MinDB actually selected,
 because MinDB's int8 cascade has an AVX2 kernel that does not exist on ARM (ADR-0006, D23). The
-deployed service runs on an Ampere A1, so **none of the figures below describe production** — they
-describe the same code on x86, and the gap is the point of labelling them.
+deployed host is an Azure `Standard_B2als_v2` — x86_64, so it gets the AVX2 kernel, and **the tables
+below describe the right kernel on the wrong CPU**: they were measured on a 20-thread i7-13700H and
+production has 2 burstable vCPU (D46). Same arithmetic, less of it at once.
 
 ```
 python -m bench.latency api    --url http://api:8000   -n 200   # what a user waits for
@@ -69,9 +70,9 @@ without it (D6).
 
 ## arm64, kernel pure-go
 
-Not measured yet. It needs the A1, and the honest placeholder is an empty table rather than the
-x86 figures with a caveat attached — the whole reason ADR-0006 exists is that quoting one for the
-other would be the easiest dishonest thing in this project.
+No ARM host any more (D46), so this stays empty rather than being quietly deleted: the labelling rule
+outlived the machine it was written for, and an empty table is the honest record of a column nobody
+can fill. The API image is amd64 only for the same reason (D45).
 
 | what | n | mean | p50 | p95 | p99 | max |
 |---|---|---|---|---|---|---|

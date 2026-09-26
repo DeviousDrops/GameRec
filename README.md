@@ -25,7 +25,7 @@ VM under k3s.
 flowchart TB
     U(["user"])
 
-    subgraph vm["single VM &middot; k3s &middot; arm64"]
+    subgraph vm["single VM &middot; k3s &middot; x86_64"]
         API["Steam-RAG API<br/>FastAPI Deployment<br/>embeds the query in-process<br/>holds names.json in memory"]
         SC["backup sidecar"]
         ING["ingest<br/>CronJob 03:17 UTC"]
@@ -71,7 +71,7 @@ reason — "*Half-Life 3* hasn't been ingested yet" beats a bare "not found".
 
 ## Status
 
-**Phase 5 — measured, and specific about what is untested.** See [DECISIONS.md](DECISIONS.md) for the reasoning
+**Phase 6 — going live on a real VM.** See [DECISIONS.md](DECISIONS.md) for the reasoning
 behind every non-obvious choice, [CONTEXT.md](CONTEXT.md) for the vocabulary, and [docs/adr/](docs/adr/) for the
 decisions that were hard to reverse.
 
@@ -81,8 +81,9 @@ decisions that were hard to reverse.
 | 1 · Local pipeline | done — ingest, search and narration working against the released MinDB image |
 | 2 · Ingest hardening | done — resumable, idempotent, paced and bounded, with a model-stamp guard |
 | 3 · Containerise + k8s | done — plain manifests, verified end to end on k3d |
-| 4 · CI + VM deploy | done — CI, R2 backups and a verified restore, k3s bootstrap; not yet run on a real A1 |
-| 5 · Polish | done — labelled x86 benchmarks, a failure-mode runbook, a post-deploy smoke test; arm64 figures wait on the A1 |
+| 4 · CI + VM deploy | done — CI, R2 backups and a verified restore, k3s bootstrap |
+| 5 · Polish | done — labelled benchmarks, a failure-mode runbook, a post-deploy smoke test |
+| 6 · Live | in progress — bringing up the Azure VM, first deploy with real R2 credentials (D46) |
 
 ## Things worth knowing up front
 
@@ -102,12 +103,14 @@ decisions that were hard to reverse.
   the cluster can reach it, and inside it a NetworkPolicy allows only the API and the ingest — with no
   credential to check, reachability is the access control.
 - **Benchmarks are labelled by architecture, and the label is checked.** MinDB's int8 cascade has an
-  AVX2 kernel that does not exist on ARM, so the deployed service is slower than any x86 figure for the
-  same code. `/health` reports the kernel MinDB actually selected — `pure-go` on the ARM VM, `avx2` on
-  an x86 dev box — so every published number can be tied to a kernel rather than an assumption. The
-  x86 tables are in [bench/README.md](bench/README.md) (a mood query is 7.6 ms at p50 against a small
-  corpus, and Search alone is 4.0 ms at 200,000 vectors); the arm64 table is deliberately empty until
-  there is an A1 to fill it. ([ADR-0006](docs/adr/0006-arm64-host-and-architecture-labelled-benchmarks.md))
+  AVX2 kernel that does not exist on ARM, so the same code is materially faster on one host than another.
+  `/health` reports the kernel MinDB actually selected, and every number in
+  [bench/README.md](bench/README.md) carries it (a mood query is 7.6 ms at p50 against a small corpus,
+  and Search alone is 4.0 ms at 200,000 vectors). The deployed host is x86_64 and reports `avx2`, so the
+  published tables describe the right *kernel* — on a different CPU, which the tables also say. The
+  rule was written for an ARM host that the project no longer has, and it survived the host changing
+  intact, which is the argument for writing it down.
+  ([ADR-0006](docs/adr/0006-arm64-host-and-architecture-labelled-benchmarks.md), D46)
 - **A restore verifies before it writes, and refuses rather than guesses.** Backups are generations:
   one prefix per snapshot, a `manifest.json` of sha256s, and a `COMPLETE` marker written last that is
   the only thing a restore trusts. A generation with a single flipped byte fails its manifest check and
@@ -115,7 +118,8 @@ decisions that were hard to reverse.
   downstream. ([ADR-0002](docs/adr/0002-backup-generation-is-atomic.md))
 - **MinDB is consumed, not vendored.** The dev stack and every deployment run
   `ghcr.io/deviousdrops/mindb:v0.1.0` — a released tag, never `latest`, built multi-arch for
-  `linux/amd64` and `linux/arm64`, so the same tag runs on a dev laptop and on the Ampere VM. MinDB's
+  `linux/amd64` and `linux/arm64`, so the same tag runs on a dev laptop and on the VM. The API image is
+  amd64 only, because the host is x86_64 and nothing pulls the other leg (D45). MinDB's
   own source, Dockerfile and CI live in its repo and are not modified from here. The FlatBuffers schema
   in `clients/` is pinned to the same tag (see [clients/README.md](clients/README.md)).
 

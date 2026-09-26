@@ -190,4 +190,4 @@ recovery    none expected; check /readyz and the newest generation's timestamp
 ```
 
 There is one node, so there is no high availability and none is claimed. `deploy/vm/README.md`
-lists what has and has not been run on a real Ampere A1 -- as of now, the bootstrap script has not.
+lists what has and has not been run on the real VM.

@@ -1,8 +1,9 @@
 # The VM
 
-One Oracle Cloud Ampere A1 (arm64), k3s, no load balancer and no managed anything (ADR-0006). The
-whole deploy is `sudo ./deploy/vm/bootstrap.sh`, which is idempotent — it is both the install and the
-way an update lands.
+One Azure `Standard_B2als_v2` — x86_64, 2 vCPU, 4 GiB, burstable — running Ubuntu 24.04 and k3s, with
+no load balancer and no managed anything (D46; ADR-0006 has the revision). The whole deploy is
+`sudo ./deploy/vm/bootstrap.sh`, which is idempotent — it is both the install and the way an update
+lands.
 
 ```
                   Internet
@@ -45,36 +46,46 @@ a snapshot; 8 GB is comfortable. MinDB's request is what it genuinely reserves a
 384 × 4 B for the float32 store plus the int8 cascade copy — not a guess, so it is the one number that
 cannot be trimmed without lowering `-capacity`.
 
-On arm64 MinDB falls back to pure Go for the int8 cascade, since the AVX2 kernel is x86-only. Every
-benchmark this project quotes is labelled with the architecture for exactly that reason (ADR-0006).
+This host is x86_64, so MinDB selects its AVX2 int8 kernel rather than the pure-Go fallback — `/health`
+reports which, and every benchmark this project quotes carries that label (ADR-0006, D46).
 
 ## Before the first bootstrap
 
-**Open 80 and 443 in the VCN.** OCI's default security list allows only 22, and nothing about the
-symptom says so — the pods are Ready, `curl localhost` works, the outside world times out.
-
-**Oracle's Ubuntu image ships iptables rules that break k3s.** The image installs a REJECT rule in
-`INPUT` and persists it with netfilter-persistent, which drops pod-to-pod and pod-to-service traffic
-in ways that look like DNS flakiness. Clear it before installing k3s:
+**Open 80 and 443 in the network security group.** Azure's default NSG allows 22 and nothing else, and
+no symptom on the VM says so — the pods are Ready, `curl localhost` works, the outside world times out.
+Prove it from somewhere else before blaming k3s:
 
 ```
-sudo iptables -L INPUT --line-numbers | grep REJECT      # find the rejects
-sudo iptables -D INPUT <n>                               # highest line number first
-sudo netfilter-persistent save
+mkdir -p /tmp/probe && cd /tmp/probe      # never $HOME: this serves whatever directory it runs in
+sudo python3 -m http.server 80            # then curl http://<public ip>/ from another machine
 ```
 
-**Point DNS at the VM** and fill the hostname in, or the Ingress matches a Host header that never
-arrives:
+A dropped SYN and a refused connection look the same to `curl` at a glance; the tell is the timing. A
+refusal comes back in one round trip, a filtered port takes seconds and returns nothing.
+
+**Point DNS at the VM.** The name is `game-rec.duckdns.org`, already in
+[50-ingress.yaml](../k8s/50-ingress.yaml). DuckDNS's web form prefills the IP of the browser talking to
+it, which quietly points the name at your laptop; update it *from the VM* instead, with no `ip=`
+parameter, so DuckDNS records the address the request came from:
 
 ```
-sed -i 's/gamerec.example.com/<your host>/' deploy/k8s/50-ingress.yaml
+read -rs TOKEN                                                 # nothing is echoed
+curl -s "https://www.duckdns.org/update?domains=game-rec&token=$TOKEN"; echo
+unset TOKEN
+```
+
+History keeps the literal `$TOKEN`, not its value. Check it with a resolver that is not your own:
+`nslookup game-rec.duckdns.org 1.1.1.1`. If the hostname ever changes, it lives in exactly one place:
+
+```
+sed -i 's/game-rec.duckdns.org/<your host>/' deploy/k8s/50-ingress.yaml
 ```
 
 ## Install
 
 ```
 sudo apt-get install -y git
-git clone https://github.com/DeviousDrops/GameRec /root/GameRec
+sudo git clone https://github.com/DeviousDrops/GameRec /root/GameRec
 cd /root/GameRec
 
 kubectl -n gamerec create secret generic gamerec-secrets \
@@ -145,8 +156,8 @@ A restore is a deliberate, disruptive operation and reads its own instructions:
 ## What has not been done on a real VM
 
 Everything above is written from the k3d verification in [../k8s/README.md](../k8s/README.md) plus the
-documented behaviour of k3s, certbot and OCI. The manifests, the backup sidecar's code path and the
-restore have all been run; **this script has not yet been run on an Oracle A1**, so the OCI-specific
-steps — the security list, the iptables rules, arm64 image pulls — are the parts most likely to need a
-correction on first contact. The script is idempotent so that correcting it is cheap: fix, `git pull`,
-run it again.
+documented behaviour of k3s, certbot and Azure. The manifests, the backup sidecar's code path and the
+restore have all been run; **this script has not yet been run end to end on the Azure VM**, so the
+host-specific steps — the NSG rules, DuckDNS, certbot against a real name — are the parts most likely
+to need a correction on first contact. The script is idempotent so that correcting it is cheap: fix,
+`git pull`, run it again.

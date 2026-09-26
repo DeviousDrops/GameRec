@@ -1,10 +1,11 @@
 # The only thing reachable from outside the VM. Traefik is whatever k3s shipped: the Ingress here is a
 # plain manifest, and which controller implements it is the distro's business, not this repo's (D40).
 #
-# HOST is a placeholder. Set it before applying -- an Ingress for a hostname nobody owns matches on a
-# Host header that never arrives, which looks deployed and answers nothing:
+# The hostname is game-rec.duckdns.org, on DuckDNS, pointed at the VM (D46). Change it in one place
+# if the host ever moves -- an Ingress for a name that resolves elsewhere matches on a Host header
+# that never arrives, which looks deployed and answers nothing:
 #
-#   sed -i 's/gamerec.example.com/<your host>/' deploy/k8s/50-ingress.yaml
+#   sed -i 's/game-rec.duckdns.org/<your host>/' deploy/k8s/50-ingress.yaml
 #
 # TLS terminates here against a Secret this repo does not create; deploy/vm/README.md has the certbot
 # loop that fills it. Without that Secret Traefik serves its own self-signed certificate, which is a
@@ -23,10 +24,10 @@ metadata:
 spec:
   tls:
     - hosts:
-        - gamerec.example.com
+        - game-rec.duckdns.org
       secretName: gamerec-tls
   rules:
-    - host: gamerec.example.com
+    - host: game-rec.duckdns.org
       http:
         paths:
           # Everything, including /livez and /readyz. They are not secrets and being able to ask the

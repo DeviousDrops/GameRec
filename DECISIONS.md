@@ -654,3 +654,20 @@ the slow one by a wide margin, and a slow release is a release people avoid cutt
 buys is a guarantee that the arm64 build still works, which matters when there is an arm64 machine to
 run it on and not before. MinDB stays multi-arch: it is Go, it cross-compiles rather than emulating,
 and it is a separate repo with its own reasons.
+
+### D46 — The host is an Azure B2als_v2, and the ARM premise is retired
+
+**Context:** D23 chose an Oracle Cloud Ampere A1 (arm64, always-free, 4 OCPU / 24 GB). The machine that
+actually exists is an Azure `Standard_B2als_v2`: x86_64, 2 vCPU, 4 GiB, burstable, in Central India,
+with the hostname on DuckDNS.
+**Options:** (a) hold out for the A1 shape, which is famously out of capacity in most regions; (b) take
+the Azure box and adjust the manifests to fit 4 GiB; (c) pay for something larger.
+**Choice:** (b). ADR-0006 gains a revision section rather than being rewritten, and D23 stays as the
+record of what was planned.
+**Trade-off:** the good news is arithmetic: MinDB gets its AVX2 int8 kernel, so the deployed service is
+faster than the ARM plan and the existing x86 benchmark tables describe the right kernel. The bad news
+is also arithmetic: 4 GiB against the A1's 24 GB means the resource requests no longer fit as written,
+and 2 burstable vCPU means sustained CPU is a credit balance rather than a constant — the paced ingest
+barely notices (35 requests a minute leaves the CPU idle between fetches), while a full reindex is
+~176k embeddings back to back and will run on baseline once credits are gone. (a) was waiting for
+hardware that may never free up; (c) buys headroom this workload has not yet shown it needs.

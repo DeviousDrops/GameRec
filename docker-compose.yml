@@ -1,8 +1,8 @@
 # Local development stack. Production is k8s; see deploy/k8s.
 services:
   mindb:
-    # A released tag, never latest (D19). The image is multi-arch, so the same tag runs here and
-    # on the arm64 VM.
+    # A released tag, never latest (D19). The image is multi-arch; the VM is x86_64 like this box,
+    # so the same manifest is what runs in both places (D46).
     image: ghcr.io/deviousdrops/mindb:v0.1.0
     command:
       - "-addr=:50051"
