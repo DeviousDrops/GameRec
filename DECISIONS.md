@@ -706,3 +706,25 @@ deploy, and an empty endpoint means no ingest lease and a crash-looping backup s
 that quietly stops backups is exactly the failure this project spent Phase 4 trying not to have.
 (a) leaks the account id into a public repo for no benefit; it is not a credential, but it is not
 load-bearing information for anyone reading the code either.
+
+### D49 — The backup sidecar never exits
+
+**Context:** D39 gave the sidecar no probes, and `ops/backup.py` exited 1 when it could not reach
+object storage, on the argument that a cluster quietly taking no backups should be loud. On the live
+cluster, with a bucket name that did not exist, that turned a backup failure into a total outage: a
+pod is Ready only when every container in it is ready, so the crash-looping sidecar dropped the MinDB
+pod out of its Service, the API got `Connection refused` to the ClusterIP, `/readyz` went 503, and
+`/recommend` was down. MinDB itself was healthy the whole time.
+**Options:** (a) keep exiting and accept it; (b) catch failures and keep running, logging every one;
+(c) move the backup into a CronJob so its failures cannot touch the serving pod.
+**Choice:** (b). Failures are caught in the watch loop and `last` is not advanced, so the next tick
+retries the same snapshot; a misconfigured store logs the same complaint every interval instead of
+exiting. One-shot runs -- `--documents`, or no `--watch` -- still exit non-zero, because there the
+exit code is the result.
+**Trade-off:** the loud signal is gone. A crash-looping container is visible in `get pods`; a log line
+is not, and the only thing that now notices stopped backups is the external "newest generation is
+older than a day" check, which the runbook already said was the real alert. That is the honest
+position: it was always the real alert, and CrashLoopBackOff was never a substitute for it -- it was a
+second failure wearing a monitoring costume. (c) is the principled fix and stays rejected for the
+reason in 20-mindb.yaml: the snapshot is on a ReadWriteOnce volume, so a separate pod can only reach
+it by landing on the same node, which is true today and not something to depend on.

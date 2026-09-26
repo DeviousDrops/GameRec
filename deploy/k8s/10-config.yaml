@@ -31,7 +31,9 @@ data:
   # Cloudflare account id, and a value patched into this ConfigMap by hand would be reset to empty by
   # the next `kubectl apply -f deploy/k8s/`, silently stopping backups.
   R2_ENDPOINT: ""
-  R2_BUCKET: "game-rec"
+  # Exact, and worth checking against the R2 dashboard rather than from memory: a near miss
+  # answers NoSuchBucket on the first PutObject, which reads like an outage rather than a typo.
+  R2_BUCKET: "gamerec"
   # Comfortably longer than a batch takes at 35 requests a minute, so a run renews long before it
   # expires; short enough that a pod killed mid-run does not block tomorrow night (D17).
   INGEST_LEASE_TTL: "1800"

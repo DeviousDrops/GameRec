@@ -194,7 +194,15 @@ def main() -> int:
     store = objectstore.from_config(config)
     if store is None:
         log.error("no object storage configured; set R2_ENDPOINT, R2_BUCKET and the credentials")
-        return 1
+        if not args.watch:
+            return 1
+        # As a sidecar this must not exit, however badly configured it is. A pod is Ready only when
+        # every container in it is ready, so a crash-looping backup drops MinDB out of its Service and
+        # takes the API down with it -- an outage strictly worse than the missing backups it is
+        # complaining about (D49). Keep saying so instead.
+        while True:
+            time.sleep(args.watch)
+            log.error("still no object storage configured; taking no backups")
 
     if args.documents:
         sync_documents(store, config)
@@ -212,8 +220,16 @@ def main() -> int:
             current = snapshot_path.stat().st_mtime_ns
         except FileNotFoundError:
             current = None
-        if current is not None and current != last and back_up_once(store, config, snapshot_path):
-            last = current
+        if current is not None and current != last:
+            # Every failure is caught, for the same reason as above: an unhandled botocore error here
+            # used to end the process, and CrashLoopBackOff on one container is a whole-pod outage.
+            # `last` is left alone, so the next tick retries the same snapshot rather than waiting for
+            # another change -- a transient R2 error costs one interval, not one generation.
+            try:
+                if back_up_once(store, config, snapshot_path):
+                    last = current
+            except Exception:
+                log.exception("backup failed; retrying in %ss", args.watch)
         time.sleep(args.watch)
 
 

@@ -130,13 +130,14 @@ spec:
             - secretRef:
                 name: gamerec-secrets
                 optional: true
-          # No probes. A sidecar that cannot reach R2 must not be able to restart MinDB, and a pod
-          # whose backup is failing while it serves queries perfectly well is not unready -- the
+          # No probes. A sidecar that cannot reach R2 must not be able to restart MinDB, and the
           # alerting for this is "the newest generation is old", which lives outside the cluster.
           #
-          # With no R2 credentials this container exits 1 and lands in CrashLoopBackOff. That is the
-          # intended behaviour: a cluster that is serving traffic and quietly taking no backups is
-          # the state worth being loud about, and MinDB keeps running either way.
+          # This container must also never exit, which is not the same statement. A pod is Ready only
+          # when every container in it is ready, and a container in CrashLoopBackOff never is -- so a
+          # failing backup used to drop this pod from the mindb Service, leaving the API with no
+          # backend and the whole service down. Loudness has to come from the log, not from the exit
+          # code (D49). ops/backup.py keeps running and keeps complaining.
           resources:
             requests:
               # It holds one snapshot in memory at a time: ~310 MB at full capacity, plus boto3.
