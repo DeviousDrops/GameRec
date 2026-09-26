@@ -4,8 +4,9 @@ A learning journal: every non-obvious choice as **context → options → choice
 Architecturally load-bearing entries also have an ADR in `docs/adr/`; the link is noted where one exists.
 
 Phase 0 established a fact that shapes almost everything below: **MinDB is not LSM-structured.**
-It is an in-memory, fixed-capacity, exact-kNN store with whole-file snapshot durability and no
-write-ahead log. See `docs/research/mindb-api-surface.md`.
+It is an in-memory, fixed-capacity, exact-kNN store with whole-file snapshot durability. See
+`docs/research/mindb-api-surface.md`. `v0.1.0` added a write-ahead log (D18), which narrows the crash
+window without changing any of that shape — and without changing the derived-index stance of D13.
 
 ---
 
@@ -225,17 +226,26 @@ wall when the nightly ingest failed. Both additive, neither changes existing wir
 **Context:** The absence of a WAL is MinDB's largest correctness gap as a storage engine, independent of
 whether GameRec needs it.
 **Options:** Build it as a GameRec dependency, or as separate upstream work.
-**Choice:** Separate, and now **handed off to the MinDB repo**. The design in
-`docs/proposals/mindb-wal.md` is kept only as the record of what GameRec asked for. Until a tagged
-release includes the WAL, the derived-index stance of D13/ADR-0003 holds unchanged.
+**Choice:** Separate, and handed off to the MinDB repo; `docs/proposals/mindb-wal.md` is kept only as
+the record of what GameRec asked for. **Shipped in `v0.1.0`.** The derived-index stance of D13/ADR-0003
+holds unchanged, as that decision always said it would.
 **Trade-off:** Keeps two repos' schedules uncoupled. The risk is that the WAL design is settled without
 a live consumer exercising it, which is why the proposal leads with its test plan.
+**What shipped, versus what was proposed:** one flag, `-wal`, where empty means `<snapshot>.wal` and
+`off` disables logging — so the log is **on by default**, the inverse of the proposal, in which an empty
+value meant no log. The sync mode, group window, batch size and segment size are not configurable.
+`Stats` reports `wal_enabled` and `wal_healthy`, which GameRec surfaces on `/health`. GameRec passes no
+WAL flags and relies on the default, so a snapshot directory now holds `mindb.snap`,
+`mindb.snap.meta` and rotating `mindb.snap.wal.NNNNNN` — which is what D28 has to account for.
 
 ---
 
 ## Deployment
 
 ### D19 — MinDB arrives as a tagged multi-arch image from GHCR
+
+**Satisfied by `v0.1.0`**, published at `ghcr.io/deviousdrops/mindb:v0.1.0` for `linux/amd64` and
+`linux/arm64`. See D28 for what consuming it changed.
 
 **Context:** MinDB needs a container image and CI, and both are being built in its own repo.
 **Options:** Build MinDB from source in GameRec's CI, vendor it, or consume a published image.
@@ -347,3 +357,28 @@ examples become 100, and the ≥90 threshold keeps its intended meaning: how dif
 **Trade-off:** A long subtitle can still fall below 90 — `"DARK SOULS 2"` against *DARK SOULS II:
 Scholar of the First Sin* is 86.1. Lowering the threshold to catch it would start matching genuinely
 different games, so that case is left to the appid and documented as a known limitation.
+
+### D28 — The dev stack consumes `ghcr.io/deviousdrops/mindb:v0.1.0`
+
+**Context:** D19 said MinDB would arrive as a tagged multi-arch GHCR image, and until one existed
+`deploy/dev/mindb.Dockerfile` built `mindb-server` from a pseudo-version with `go install`. That file
+carried its own instruction to delete itself once the image shipped. `v0.1.0` shipped it, and the repo
+also moved from `typicallhavok/mindb` to `DeviousDrops/mindb`.
+**Options:** Keep the local build as a fallback alongside the image; keep it for a dev-only fast path
+against unreleased MinDB commits; or delete it and consume the tag everywhere.
+**Choice:** Delete it. `docker-compose.yml` pulls the released tag, the same one a Phase 3 manifest will
+name, so the dev stack and production run identical bytes. The FlatBuffers pin in `clients/` moved to
+the same tag; its schema is byte-identical to the commit the bindings were generated from, so nothing
+was regenerated.
+**Trade-off:** Testing against an unreleased MinDB commit now means tagging a release upstream — which
+is the right friction, since the alternative is a dev stack that can pass against code no deployment
+will ever run. Two consequences worth recording. The image is **distroless**: no shell, so the compose
+healthcheck that shelled out to `nc` cannot work, and it was removed in favour of the API blocking on
+channel readiness at startup (`MinDBClient.wait_ready`); `grpc.health.v1` on `:50052` is the real probe
+and Phase 3 uses it. And `Save` now writes a `mindb.snap.meta` sidecar next to the snapshot, so a Backup
+Generation is no longer one file — ADR-0002 assumes it is, and that has to be resolved before the backup
+sidecar is built.
+
+**Verified against the published image**, not assumed: `tests/test_flatbuffers_codec.py` passes against
+it, and `Stats` reports `dims=384 capacity=5000 kernel_name=avx2 fast_int8=true wal_enabled=true
+wal_healthy=true`.

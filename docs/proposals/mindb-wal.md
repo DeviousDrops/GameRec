@@ -1,11 +1,13 @@
 # Proposal: a write-ahead log for MinDB
 
-**Status:** **handed off to the MinDB repo.** Kept here only as the record of what GameRec asked for and
-why; the implementation, and any revision of this design, belong upstream. Nothing in `../mindb` was
-touched from this repo.
+**Status:** **implemented upstream in MinDB `v0.1.0`.** Kept here only as the record of what GameRec
+asked for and why; the implementation, and any revision of this design, belong upstream. Nothing in
+`../mindb` was touched from this repo. What shipped differs from this proposal in its configuration
+surface — see the note under [Configuration](#configuration) — and the record is left unedited
+otherwise, since the point of the document is what was proposed, not what was built.
 **Relationship to GameRec:** none. GameRec proceeds under ADR-0003 (MinDB is a derived index) whether
-or not this is built. This document exists so the WAL can be judged on its own merits as storage-engine
-work.
+or not it exists: it proceeded without one, and nothing about it changes now that one is there. This
+document exists so the WAL can be judged on its own merits as storage-engine work.
 
 ---
 
@@ -136,6 +138,14 @@ heuristic:
 | `-wal-group-window` | `1ms` | How long the committer waits to batch |
 | `-wal-max-batch` | `256` | Records per fsync |
 | `-wal-segment-size` | `64MiB` | Rotation threshold |
+
+**What `v0.1.0` actually exposes:** one flag, `-wal`, documented as *"write-ahead log base path; empty
+means `<snapshot>.wal`, `off` disables logging"* — the inverse of the default proposed here, where empty
+meant no log. The log is on unless `-wal=off` is passed. None of the batching or sync knobs are flags;
+the committer's behaviour is fixed. `Stats` reports
+`wal_enabled` and `wal_healthy`, which is what GameRec surfaces on `/health`. Fewer knobs is the better
+call for a single-deployment engine: every one of those flags is a way to configure away the durability
+the feature exists to provide.
 
 ## Test plan
 
