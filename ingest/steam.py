@@ -16,13 +16,15 @@ from dataclasses import dataclass
 
 import httpx
 
+from ingest.throttle import RATE_LIMIT_BACKOFF, RateLimiter
+
 log = logging.getLogger(__name__)
 
 STEAMSPY_ALL = "https://steamspy.com/api.php"
 APPDETAILS = "https://store.steampowered.com/api/appdetails"
 
-# Steam tolerates roughly 200 requests per 5 minutes. Phase 2 makes this configurable and adds
-# proper backoff; this is the floor that keeps the sample run from getting the dev box rate limited.
+# Steam tolerates roughly 200 requests per 5 minutes. Pacing against that budget is the RateLimiter's
+# job (D17); this delay survives only as the fallback for callers that pass no limiter.
 DEFAULT_DELAY = 1.6
 
 
@@ -33,10 +35,14 @@ class Popular:
     review_count: int
 
 
-def fetch_popular(limit: int, client: httpx.Client | None = None) -> list[Popular]:
+def fetch_popular(
+    limit: int, client: httpx.Client | None = None, limiter: RateLimiter | None = None
+) -> list[Popular]:
     """Top games by owner count, in popularity order."""
     owns = client or httpx.Client(timeout=30)
     try:
+        if limiter is not None:
+            limiter.acquire()
         page = owns.get(STEAMSPY_ALL, params={"request": "all", "page": 0}).json()
     finally:
         if client is None:
@@ -50,24 +56,44 @@ def fetch_popular(limit: int, client: httpx.Client | None = None) -> list[Popula
     return rows[:limit]
 
 
-def fetch_details(appid: int, client: httpx.Client, attempts: int = 4) -> dict | None:
-    """Returns the appdetails `data` block, or None if Steam has nothing to say about this appid."""
-    for attempt in range(attempts):
+def fetch_details(
+    appid: int,
+    client: httpx.Client,
+    attempts: int = 4,
+    limiter: RateLimiter | None = None,
+) -> dict | None:
+    """Returns the appdetails `data` block, or None if Steam has nothing to say about this appid.
+
+    Failures and rate limits get separate budgets. A 429 is not a failure -- it is Steam saying the
+    request was fine but the budget is spent -- so spending the retry allowance on it would drop games
+    from the corpus for no reason other than being throttled.
+    """
+    failures = throttles = 0
+    while failures < attempts and throttles < attempts:
+        if limiter is not None:
+            limiter.acquire()
         try:
             response = client.get(
                 APPDETAILS, params={"appids": appid, "l": "english", "cc": "us"}, timeout=30
             )
             if response.status_code == 429:
-                raise httpx.HTTPError("rate limited")
+                throttles += 1
+                if limiter is not None:
+                    limiter.penalise(f"appid {appid}")
+                else:
+                    time.sleep(random.uniform(*RATE_LIMIT_BACKOFF))
+                continue
             response.raise_for_status()
             body = response.json().get(str(appid)) or {}
             return body.get("data") if body.get("success") else None
         except (httpx.HTTPError, ValueError) as exc:
-            if attempt == attempts - 1:
+            failures += 1
+            if failures >= attempts:
                 log.warning("appid %s failed after %d attempts: %s", appid, attempts, exc)
                 return None
             # Exponential backoff with jitter, so a burst of failures does not resynchronise.
-            delay = (2**attempt) + random.uniform(0, 1)
+            delay = (2 ** (failures - 1)) + random.uniform(0, 1)
             log.info("appid %s: %s; retrying in %.1fs", appid, exc, delay)
             time.sleep(delay)
+    log.warning("appid %s: gave up after %d rate limits", appid, throttles)
     return None
