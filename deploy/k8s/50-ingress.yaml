@@ -1,0 +1,40 @@
+# The only thing reachable from outside the VM. Traefik is whatever k3s shipped: the Ingress here is a
+# plain manifest, and which controller implements it is the distro's business, not this repo's (D40).
+#
+# HOST is a placeholder. Set it before applying -- an Ingress for a hostname nobody owns matches on a
+# Host header that never arrives, which looks deployed and answers nothing:
+#
+#   sed -i 's/gamerec.example.com/<your host>/' deploy/k8s/50-ingress.yaml
+#
+# TLS terminates here against a Secret this repo does not create; deploy/vm/README.md has the certbot
+# loop that fills it. Without that Secret Traefik serves its own self-signed certificate, which is a
+# browser warning rather than an outage, so the tls block stays.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gamerec
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/part-of: gamerec
+  annotations:
+    # Redirect plain HTTP rather than serving both. The API is read-only and the corpus is public
+    # Steam data, so this is about not training anyone to ignore the scheme, not about secrecy.
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  tls:
+    - hosts:
+        - gamerec.example.com
+      secretName: gamerec-tls
+  rules:
+    - host: gamerec.example.com
+      http:
+        paths:
+          # Everything, including /livez and /readyz. They are not secrets and being able to ask the
+          # service whether it thinks it is ready, from outside, is worth more than hiding them.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gamerec-api
+                port:
+                  number: 8000
