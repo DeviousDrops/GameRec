@@ -230,3 +230,62 @@ def test_the_document_store_is_synced_whole(store, tmp_path):
 def test_syncing_an_empty_corpus_directory_uploads_nothing(store, tmp_path):
     assert backup.sync_documents(store, Config(corpus_dir=tmp_path)) == 0
     assert store.objects == {}
+
+
+class _Stop(Exception):
+    """Ends the watch loop from inside a patched sleep, since the loop has no other exit."""
+
+
+def test_a_failing_backup_does_not_end_the_sidecar(monkeypatch, tmp_path):
+    """The outage this prevents: CrashLoopBackOff on one container makes the whole pod unready, which
+    drops MinDB out of its Service and takes the API down with it (D49)."""
+    snapshot = tmp_path / "mindb.snap"
+    snapshot.write_bytes(b"vectors")
+
+    attempts = []
+
+    def fails(*_args, **_kwargs):
+        attempts.append(1)
+        raise RuntimeError("NoSuchBucket")
+
+    ticks = []
+
+    def sleeping(seconds):
+        ticks.append(seconds)
+        if len(ticks) == 3:
+            raise _Stop
+
+    monkeypatch.setattr(backup.objectstore, "from_config", lambda _config: MemoryStore())
+    monkeypatch.setattr(backup, "back_up_once", fails)
+    monkeypatch.setattr(backup.time, "sleep", sleeping)
+    monkeypatch.setattr("sys.argv", ["backup", f"--snapshot={snapshot}", "--watch=1"])
+
+    with pytest.raises(_Stop):
+        backup.main()
+
+    # Three ticks, three attempts: the snapshot's mtime never changed, so a retry only happens because
+    # the failure left `last` alone. Advancing it would have written one generation fewer per outage.
+    assert len(attempts) == 3
+
+
+def test_an_unconfigured_sidecar_complains_instead_of_exiting(monkeypatch, tmp_path):
+    ticks = []
+
+    def sleeping(seconds):
+        ticks.append(seconds)
+        if len(ticks) == 2:
+            raise _Stop
+
+    monkeypatch.setattr(backup.objectstore, "from_config", lambda _config: None)
+    monkeypatch.setattr(backup.time, "sleep", sleeping)
+    monkeypatch.setattr("sys.argv", ["backup", f"--snapshot={tmp_path / 'x.snap'}", "--watch=1"])
+
+    with pytest.raises(_Stop):
+        backup.main()
+
+
+def test_a_one_shot_run_with_no_store_still_fails(monkeypatch, tmp_path):
+    """Without --watch this is a Job, and there the exit code is the result rather than a liability."""
+    monkeypatch.setattr(backup.objectstore, "from_config", lambda _config: None)
+    monkeypatch.setattr("sys.argv", ["backup", f"--snapshot={tmp_path / 'x.snap'}"])
+    assert backup.main() == 1

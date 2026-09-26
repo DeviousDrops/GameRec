@@ -73,20 +73,31 @@ which is what makes a failed verification a no-op rather than half a restore.
 
 ## R2 is unreachable or has no credentials
 
-*Exercised: the sidecar with `R2_ENDPOINT` empty; ingest with no credentials configured.*
+*Exercised on the live cluster with a bucket name that did not exist, which is how the first version
+of this entry turned out to be wrong.*
 
 ```
-symptom     the backup container exits 1 and lands in CrashLoopBackOff
-            MinDB and the API are unaffected; queries keep working
+symptom     the backup container logs the botocore error and keeps running
+            MinDB stays in its Service; queries keep working
             ingest logs "running without the ingest lease" and runs anyway
-behaviour   backups stop. Nothing else changes, and nothing restarts MinDB
-recovery    fix the Secret; the sidecar picks up the next snapshot mtime change
+behaviour   backups stop and say so every interval. Nothing restarts MinDB
+recovery    fix the Secret or the bucket; the next tick retries the same snapshot
 ```
 
-The sidecar has no probes on purpose (D39). A pod whose backup is failing while it answers queries
-perfectly well is not unready, and a backup container must not be able to restart MinDB. The
-consequence is that **nothing inside the cluster notices backups have stopped** -- the alert worth
-having is "the newest generation is older than a day", and it has to live outside the cluster.
+This entry used to claim the container exited 1 into CrashLoopBackOff and that "MinDB and the API are
+unaffected". The first half was true and the second did not follow from it: a pod is Ready only when
+every container in it is ready, so the crash-looping sidecar dropped the pod out of the `mindb`
+Service, the API got `Connection refused` to the ClusterIP, `/readyz` went 503, and the service was
+down -- caused entirely by a backup failure. It was marked *exercised* because MinDB had been watched
+not restarting. Nobody had checked whether it was still reachable.
+
+The sidecar now catches every failure and keeps running (D49), and `last` is deliberately not advanced
+on failure, so a transient R2 error costs one interval rather than one generation. The probe decision
+in D39 is unchanged and was never the problem.
+
+**Nothing inside the cluster notices backups have stopped** -- that is still true, and now it is the
+whole story rather than a footnote. The alert worth having is "the newest generation is older than a
+day", and it has to live outside the cluster.
 
 Ingest running without a lease is deliberate too: backups are worth more than mutual exclusion, and
 the cost of two concurrent ingests is repeated work, because every insert is keyed by appid.
