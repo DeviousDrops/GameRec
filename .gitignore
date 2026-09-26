@@ -27,6 +27,11 @@ snapshots/
 .claude/.headroom_*
 .serena/
 
+# Agent scratch output. Transcripts, drafts and anything an assistant dumps mid-session — none of it
+# is part of the project.
+Claude outputs/
+scratchpad/
+
 # Editors / OS
 .idea/
 .vscode/
