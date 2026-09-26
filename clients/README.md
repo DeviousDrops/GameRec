@@ -24,17 +24,24 @@ proof; if that test ever fails, this assumption is what broke.
 
 | | |
 |---|---|
-| Source | `github.com/typicallhavok/mindb` — `fbs/mindb.fbs` |
-| Commit | `69a0c9c705c81b565f6d5b77fc7e16ca8a5789a3` (`v0.0.0-20260918114935-69a0c9c705c8`) |
+| Source | `github.com/DeviousDrops/mindb` — `fbs/mindb.fbs` |
+| Tag | `v0.1.0` (commit `282bccd73d3338a2ca5b6b4f43653f9699f78bf1`) |
+| Image | `ghcr.io/deviousdrops/mindb:v0.1.0` — multi-arch, `linux/amd64` and `linux/arm64` |
 | flatc | `25.12.19` (matches MinDB's `github.com/google/flatbuffers v25.12.19` and the Python `flatbuffers` runtime) |
 
-**This pin is provisional.** MinDB has no tagged release yet, so the schema is pinned to a commit rather
-than a tag. Per D19 it must move to a released tag before deployment, alongside the GHCR image.
+The pin is a released tag, and the image is built from that same tag, so the schema this client was
+generated from and the server it talks to cannot drift apart. `v0.1.0`'s schema is **byte-identical** to
+the commit the bindings were generated from, so moving the pin required no regeneration — checked by
+diffing `fbs/mindb.fbs` at the tag against this copy.
 
-This commit adds `Get` and `Stats` (D8) and the first `wal_enabled` / `wal_healthy` fields. GameRec uses
+MinDB's repo owner and Go module path both moved to `DeviousDrops` before the tag. The old
+`typicallhavok` URLs still redirect, but nothing here should use them.
+
+The schema carries `Get` and `Stats` (D8) and the `wal_enabled` / `wal_healthy` fields. GameRec uses
 `Stats.kernel_name` and `goarch` for `/health`, so benchmark labels come from the server rather than an
-assumption. The same commit also runs a standard `grpc.health.v1.Health` service on `:50052`, which is
-the readiness probe Phase 3 should use.
+assumption. `v0.1.0` implements the write-ahead log, so those two fields now describe a live log instead
+of reading false; it also serves `grpc.health.v1.Health` on `:50052` (`-health-addr`), which is the
+readiness probe Phase 3 should use.
 
 ## Regenerating
 
