@@ -67,7 +67,7 @@ The vector store's own on-disk copy of everything it holds.
 _Avoid_: dump, export, save file
 
 **Backup Generation**:
-A Snapshot and the Checkpoint that matches it, kept and restored as one unit. Restoring half of one is what this term exists to prevent.
+A Snapshot, its `.meta` sidecar and the Checkpoint that matches it, written under one `gen-<timestamp>/` prefix and restorable only once a `COMPLETE` marker lands. Restoring half of one is what this term exists to prevent.
 _Avoid_: backup, restore point, snapshot (when the Checkpoint is included)
 
 **Game Document Store**:

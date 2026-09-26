@@ -5,9 +5,9 @@ deployment is readable in one sitting, which is the point.
 
 ```
                           ┌──────────────────────────┐
-   kubectl port-forward   │  Service gamerec-api     │   ClusterIP only; the Ingress arrives
-   ──────────────────────▶│  (2 replicas, rolling)   │   with the VM and TLS in Phase 4
-                          └────────┬────────┬────────┘
+   Ingress or             │  Service gamerec-api     │   Traefik terminates TLS on the VM
+   kubectl port-forward   │  (2 replicas, rolling)   │   (50-ingress.yaml); port-forward
+   ──────────────────────▶└────────┬────────┬────────┘   is how k3d reaches it
                                    │        │ reads /corpus (ro)
                           gRPC :50051       │
                                    ▼        ▼
@@ -16,11 +16,14 @@ deployment is readable in one sitting, which is the point.
                           │ Recreate, 1  │  │ documents.jsonl        │
                           │ PVC mindb-   │  │ names.json             │
                           │ data         │  │ checkpoint.json        │
+                          │ + backup ────┼──┼──▶ R2: gen-<ts>/       │
+                          │   sidecar    │  │    (reads both, ro)    │
                           └──────────────┘  └───────────▲────────────┘
                                    ▲                    │ writes
                                    │ gRPC :50051        │
                           ┌────────┴────────────────────┴────────────┐
                           │ CronJob gamerec-ingest, 03:17 UTC, Forbid│
+                          │ holds the R2 lease; pushes the documents │
                           └──────────────────────────────────────────┘
 ```
 
@@ -33,6 +36,7 @@ deployment is readable in one sitting, which is the point.
 | `25-mindb-netpol.yaml` | MinDB has no auth, so reachability is the access control |
 | `30-api.yaml` | the API Deployment and Service |
 | `40-ingest.yaml` | the nightly ingest CronJob |
+| `50-ingress.yaml` | the only thing reachable from outside; the hostname is a placeholder |
 | `manual/` | one-off Jobs and the Secret example — deliberately **not** applied by `-f deploy/k8s/` |
 
 The numeric prefixes exist because `kubectl apply -f deploy/k8s/` applies files in name order, and the
@@ -46,7 +50,7 @@ the Secret example should never overwrite a real key.
 k3d cluster create gamerec --agents 0
 
 docker build -t ghcr.io/deviousdrops/gamerec-api:0.1.0 -f deploy/api.Dockerfile .
-k3d image import ghcr.io/deviousdrops/gamerec-api:0.1.0 -c gamerec   # no registry until Phase 4 CI
+k3d image import ghcr.io/deviousdrops/gamerec-api:0.1.0 -c gamerec   # or pull a released tag
 
 kubectl apply -f deploy/k8s/
 kubectl -n gamerec rollout status deploy/mindb
@@ -86,12 +90,14 @@ k3d v5.9.0, k3s v1.35.5, single node:
 
 ## Deliberately not here yet
 
-- **An Ingress, a hostname and TLS.** Phase 4, with the VM. An Ingress for a host nobody owns would
-  be decoration.
-- **A published image.** Phase 4's CI builds and pushes `gamerec-api`; until then the tag is imported
-  into the local cluster by hand, which is why the pull policy is `IfNotPresent`.
-- **Backups and the Ingest Lease.** Both need object storage (D20), so both land with R2 in Phase 4.
-  Until then `concurrencyPolicy: Forbid` covers the scheduled ingest but not a manual run beside it.
+- **A hostname.** `50-ingress.yaml` carries `gamerec.example.com`, which matches a Host header that
+  never arrives. Set it before applying; [../vm/README.md](../vm/README.md) has the rest.
+- **Anything in the cluster that renews a certificate.** TLS comes from a Secret that certbot writes
+  from the host, because cert-manager is an operator and a CRD set to maintain for one certificate on
+  one host (D40).
+- **Any verification of the backup sidecar in-cluster.** The backup and restore code paths were
+  exercised against a real S3 endpoint, and the manifests are applied here unchanged, but the sidecar
+  itself has not been watched doing its job on a cluster with real R2 credentials.
 - **More than one node.** The corpus PVC is `ReadWriteOnce`, and the API and ingest share it only
   because every pod lands on the same node. A second node breaks that, and the fix is R2 rather than
   a fight with `ReadWriteMany`.

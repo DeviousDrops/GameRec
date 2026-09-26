@@ -28,8 +28,8 @@ flowchart TB
     subgraph vm["single VM &middot; k3s &middot; arm64"]
         API["Steam-RAG API<br/>FastAPI Deployment<br/>embeds the query in-process<br/>holds names.json in memory"]
         SC["backup sidecar"]
-        ING["ingest<br/>CronJob 20:30 UTC"]
-        MDB[("MinDB<br/>StatefulSet replicas 1<br/>384-dim &middot; capacity 200k")]
+        ING["ingest<br/>CronJob 03:17 UTC"]
+        MDB[("MinDB<br/>Deployment &middot; Recreate &middot; replicas 1<br/>384-dim &middot; capacity 200k")]
     end
 
     GROQ(["Groq"])
@@ -39,10 +39,11 @@ flowchart TB
     U -->|"mood query and/or seed game"| API
     API <-->|"Search &middot; Get"| MDB
     API -->|"narrate"| GROQ
-    API -->|"names.json"| R2
+    API -->|"names.json"| PVC[("corpus PVC")]
     ING -->|"~35 req/min"| STEAM
     ING -->|"upsert &middot; snapshot"| MDB
-    ING -->|"documents"| R2
+    ING -->|"documents"| PVC
+    ING -->|"documents &middot; name index"| R2
     SC -.->|"reads PVC"| MDB
     SC -->|"backups"| R2
     R2 -.->|"restore / reindex"| MDB
@@ -70,8 +71,8 @@ reason — "*Half-Life 3* hasn't been ingested yet" beats a bare "not found".
 
 ## Status
 
-**Phase 3 — running on Kubernetes.** See [DECISIONS.md](DECISIONS.md) for the reasoning behind every
-non-obvious choice, [CONTEXT.md](CONTEXT.md) for the vocabulary, and [docs/adr/](docs/adr/) for the
+**Phase 4 — deployable, backed up and restorable.** See [DECISIONS.md](DECISIONS.md) for the reasoning
+behind every non-obvious choice, [CONTEXT.md](CONTEXT.md) for the vocabulary, and [docs/adr/](docs/adr/) for the
 decisions that were hard to reverse.
 
 | Phase | |
@@ -80,7 +81,7 @@ decisions that were hard to reverse.
 | 1 · Local pipeline | done — ingest, search and narration working against the released MinDB image |
 | 2 · Ingest hardening | done — resumable, idempotent, paced and bounded, with a model-stamp guard |
 | 3 · Containerise + k8s | done — plain manifests, verified end to end on k3d |
-| 4 · CI + VM deploy | GitHub Actions, k3s bootstrap, backups |
+| 4 · CI + VM deploy | done — CI, R2 backups and a verified restore, k3s bootstrap; not yet run on a real A1 |
 | 5 · Polish | benchmarks, failure modes |
 
 ## Things worth knowing up front
@@ -105,6 +106,11 @@ decisions that were hard to reverse.
   same code. `/health` reports the kernel MinDB actually selected — `pure-go` on the ARM VM, `avx2` on
   an x86 dev box — so every published number can be tied to a kernel rather than an assumption.
   ([ADR-0006](docs/adr/0006-arm64-host-and-architecture-labelled-benchmarks.md))
+- **A restore verifies before it writes, and refuses rather than guesses.** Backups are generations:
+  one prefix per snapshot, a `manifest.json` of sha256s, and a `COMPLETE` marker written last that is
+  the only thing a restore trusts. A generation with a single flipped byte fails its manifest check and
+  nothing is written — a snapshot that is merely *missing vectors* would look valid to everything
+  downstream. ([ADR-0002](docs/adr/0002-backup-generation-is-atomic.md))
 - **MinDB is consumed, not vendored.** The dev stack and every deployment run
   `ghcr.io/deviousdrops/mindb:v0.1.0` — a released tag, never `latest`, built multi-arch for
   `linux/amd64` and `linux/arm64`, so the same tag runs on a dev laptop and on the Ampere VM. MinDB's
@@ -123,7 +129,9 @@ pytest -q                         # unit tests; the codec test needs MinDB up
 ```
 
 Running it on Kubernetes is [deploy/k8s/README.md](deploy/k8s/README.md): plain manifests, a k3d
-walkthrough, and the list of failure modes that were actually exercised rather than assumed.
+walkthrough, and the list of failure modes that were actually exercised rather than assumed. Putting it
+on a VM is [deploy/vm/README.md](deploy/vm/README.md): one idempotent bootstrap script, the memory
+arithmetic, and the Oracle Cloud traps that present as anything but their cause.
 
 `ingest.run` is safe to interrupt and safe to rerun. It resumes from `data/checkpoint.json`, paces
 itself against Steam, and takes new appids before refreshes, so a stop halfway never costs the games

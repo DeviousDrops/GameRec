@@ -529,3 +529,63 @@ would also give two images two chances to disagree about the render template or 
 and that disagreement is undetectable downstream: a document embedded by one version and queried by
 another returns plausible, wrong neighbours. One image makes the model stamp a property of the
 deployment rather than of whichever pod happens to be running.
+
+### D38 — A Backup Generation is a directory with a manifest, not a single file
+
+**Context:** ADR-0002 was written when a snapshot was one file. MinDB v0.1.0's `Save` writes a
+`mindb.snap.meta` sidecar beside it, so a generation now has to carry at least two files plus the
+checkpoint, and the restore has to decide what is mandatory.
+**Options:** (a) back up only `mindb.snap` and let MinDB regenerate the sidecar; (b) a directory per
+generation with a `manifest.json` of sizes and sha256s, and a `COMPLETE` marker written last; (c) a tar
+archive per generation.
+**Choice:** (b). Booting MinDB from a snapshot with its sidecar deleted settled what is mandatory: it
+loads (`loaded=200`), warns that the log could not be checked against the snapshot, and writes a fresh
+sidecar at the next `Save`. So the sidecar is included and never required, and `meta_included` is
+recorded in the manifest.
+**Trade-off:** (c) would make atomicity trivial — one object, either there or not — at the cost of
+being unable to fetch the checkpoint without downloading ~310 MB of vectors, which is exactly what
+`--list` and any inspection wants to do. (b) needs the `COMPLETE` marker to stand in for atomicity and
+a sha256 check on restore to stand in for tar's integrity, both of which are cheap and both of which
+are now tested: a generation with one flipped byte is refused with nothing written.
+
+### D39 — The backup is a sidecar in MinDB's pod, not a CronJob
+
+**Context:** Something has to copy the snapshot to R2. The snapshot lives on a ReadWriteOnce volume.
+**Options:** (a) a sidecar in the MinDB pod; (b) a CronJob mounting the same PVC; (c) MinDB uploading
+its own snapshots.
+**Choice:** (a), watching the snapshot's mtime on a 60s poll.
+**Trade-off:** (b) reads better — a backup is a scheduled task — and works today only because there is
+one node, so a second pod is guaranteed to land beside the volume. That guarantee is the single-node
+assumption from D33 in a place where it would fail silently by scheduling nowhere. (c) is out of scope:
+MinDB is a separate repo and an embedded vector store has no business holding cloud credentials. The
+cost of (a) is a container that can crash-loop beside a healthy MinDB, which is the intended signal
+rather than a defect — no probe on the sidecar can restart MinDB, and a cluster answering queries while
+taking no backups is worth being loud about.
+
+### D40 — Traefik and local-path stay; cert-manager does not arrive
+
+**Context:** k3s bundles an ingress controller, a storage provisioner and metrics-server, installed
+through its own HelmChart CRDs. The convention here is plain manifests, no Helm and no operators.
+**Options:** (a) keep what k3s ships and write plain `Ingress` and `PersistentVolumeClaim` manifests
+against it; (b) disable them and install an ingress controller and a provisioner directly; (c) keep
+them and add cert-manager for certificates.
+**Choice:** (a). TLS is certbot in standalone mode on the host, with a deploy hook that writes the
+certificate into the `gamerec-tls` Secret.
+**Trade-off:** the convention is about what *this repo* manages, and (a) keeps every file here a plain
+manifest while the distro manages its own components. (c) would automate renewal properly, at the price
+of an operator and a CRD set to keep current for one certificate on one host; certbot's timer already
+renews, and the hook is fifteen lines that fail loudly. (b) trades a working default for work.
+
+### D41 — The ingest pushes the document store; the sidecar pushes the vectors
+
+**Context:** Two things need to reach R2 on different clocks. The document store is ~180 MB that grows
+by appending, once a night. The snapshot is ~310 MB that changes wholesale every minute.
+**Options:** (a) one component uploads both; (b) the ingest uploads the corpus at the end of a run and
+the sidecar uploads generations as the snapshot changes; (c) incremental uploads of the corpus by byte
+offset.
+**Choice:** (b), with the corpus pushed whole even when the run failed partway.
+**Trade-off:** (a) would put both under one lock and one log, but it also means either uploading 310 MB
+of unchanged vectors nightly or leaving the snapshot backed up only as often as the ingest runs. (c) is
+possible — the corpus only ever appends — and is not worth the class of bug it invites: an offset agreed
+wrongly between two versions of this code yields a corpus that parses and lies. Whole-file upload of
+180 MB nightly is cheap, and R2 has no egress fee to make a restore expensive.

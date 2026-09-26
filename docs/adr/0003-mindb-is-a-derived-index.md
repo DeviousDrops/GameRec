@@ -22,6 +22,8 @@ MinDB the source of truth. Recovery is still the last Backup Generation plus an 
 and nothing may exist only inside MinDB.
 
 What the WAL does change is the on-disk shape of a snapshot: `Save` now writes a `<snapshot>.meta`
-sidecar alongside the snapshot file and rotates `<snapshot>.wal.NNNNNN` segments. ADR-0002 assumes a
-Backup Generation is the single snapshot file, and that the sidecar reacts to its atomic rename. That
-assumption needs revisiting before the backup sidecar is built in Phase 4.
+sidecar alongside the snapshot file and rotates `<snapshot>.wal.NNNNNN` segments. ADR-0002 assumed a
+Backup Generation was that one file; it is now a directory with a manifest, the sidecar included but
+not required, and the WAL segments left where they are (D38). Reacting to the atomic rename still
+holds — it is what the backup watches — with a re-stat after the read to catch the snapshot being
+replaced mid-copy.
