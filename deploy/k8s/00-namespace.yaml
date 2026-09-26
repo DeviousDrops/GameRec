@@ -1,0 +1,8 @@
+# Everything GameRec owns lives in one namespace, so `kubectl delete ns gamerec` is a complete
+# teardown and nothing is left behind on a shared cluster.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gamerec
+  labels:
+    app.kubernetes.io/part-of: gamerec

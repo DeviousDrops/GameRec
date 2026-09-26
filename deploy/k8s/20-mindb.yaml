@@ -1,0 +1,135 @@
+# MinDB: the vector index. Consumed as a released image and never built here (D19, D28).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mindb-data
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/part-of: gamerec
+    app.kubernetes.io/component: mindb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # A 200k-vector snapshot is ~310 MB, and Save keeps a rotated WAL beside it plus the .meta
+      # sidecar, so the claim is sized for several generations rather than exactly one.
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mindb
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/name: mindb
+    app.kubernetes.io/part-of: gamerec
+    app.kubernetes.io/component: mindb
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate. Two reasons, either sufficient: the volume is ReadWriteOnce, so a
+  # surge pod would sit Pending forever waiting for it, and two MinDB processes writing one snapshot
+  # would corrupt it. The cost is visible downtime during a rollout, which the API answers with a
+  # 503 and Retry-After rather than by holding connections open (D7).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mindb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mindb
+        app.kubernetes.io/part-of: gamerec
+        app.kubernetes.io/component: mindb
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        # The published image is distroless `nonroot`: uid 65532, no shell. fsGroup is what makes the
+        # volume writable to it, since nothing in the image can chown anything.
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # Long enough to finish an in-flight Save. A SIGKILL mid-snapshot is survivable -- the WAL and
+      # the corpus both cover it -- but there is no reason to spend the recovery.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: mindb
+          image: ghcr.io/deviousdrops/mindb:v0.1.0
+          args:
+            - "-addr=:50051"
+            - "-dims=384"              # bge-small-en-v1.5 (D3)
+            - "-capacity=200000"       # above all 176,952 games, so the wall is unreachable (D21)
+            - "-snapshot=/data/mindb.snap"
+            - "-snapshot-interval=60s"
+            # -health-addr defaults to :50052 and -wal to <snapshot>.wal, so neither is passed. The
+            # WAL improves MinDB's own crash durability; it does not make MinDB the source of
+            # truth (D13, D18).
+          ports:
+            - name: grpc
+              containerPort: 50051
+            - name: health
+              containerPort: 50052
+          # grpc.health.v1 on the health port, which is the only probe the image can serve: it is
+          # distroless, so there is no shell and no nc to exec.
+          startupProbe:
+            grpc:
+              port: 50052
+            # Boot reserves capacity eagerly and may replay a WAL, so a cold start is not instant.
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            grpc:
+              port: 50052
+            periodSeconds: 10
+          livenessProbe:
+            grpc:
+              port: 50052
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              # 200,000 x 384 x 4 B is ~307 MB for the float32 store, plus the int8 cascade copy and
+              # payloads: ~520 MB reserved at boot whether or not it is used (D21). The request is
+              # what it actually reserves; the limit leaves headroom for payload growth.
+              memory: 700Mi
+              cpu: 200m
+            limits:
+              memory: 1200Mi
+              cpu: "2"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mindb-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mindb
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/name: mindb
+    app.kubernetes.io/part-of: gamerec
+spec:
+  # ClusterIP only. MinDB has no authentication of any kind, so nothing outside the cluster should be
+  # able to reach it -- see 25-mindb-netpol.yaml for the inside.
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mindb
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+    - name: health
+      port: 50052
+      targetPort: health

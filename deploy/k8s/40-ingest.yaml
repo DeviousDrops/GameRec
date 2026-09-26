@@ -1,0 +1,86 @@
+# The nightly ingest (D14, D15). The same image as the API, running `python -m ingest.run`.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gamerec-ingest
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/name: gamerec-ingest
+    app.kubernetes.io/part-of: gamerec
+    app.kubernetes.io/component: ingest
+spec:
+  # 03:17 UTC. Not on the hour: every cron on every host fires at :00, and Steam is on the receiving
+  # end of all of them.
+  schedule: "17 3 * * *"
+  timeZone: "Etc/UTC"
+  # Forbid, because pacing is per-process (D17): two runs would each stay under the rate limit and
+  # jointly sail past it. This is half of the guard. The other half is the Ingest Lease, which covers
+  # a manual run started beside the CronJob; it needs object storage, so it lands with R2 in Phase 4.
+  concurrencyPolicy: Forbid
+  # A missed window is not worth catching up on: the next run picks up from the checkpoint anyway.
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Retries are safe -- the run is idempotent and resumable (D13, D14) -- but a run that keeps
+      # failing is a bug, not a blip, and retrying it all night spends Steam requests to learn that.
+      backoffLimit: 2
+      # Six hours. Without it, one wedged run holds concurrencyPolicy Forbid forever and the ingest
+      # silently stops happening, which is the failure nobody notices until the corpus is stale.
+      activeDeadlineSeconds: 21600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: gamerec-ingest
+            app.kubernetes.io/part-of: gamerec
+            app.kubernetes.io/component: ingest
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: ingest
+              image: ghcr.io/deviousdrops/gamerec-api:0.1.0
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-m", "ingest.run"]
+              # 2,000 candidates a night: enough to absorb new releases and a share of refreshes,
+              # small enough that a run fits its window at 35 requests a minute (D17).
+              args: ["--limit", "2000"]
+              envFrom:
+                - configMapRef:
+                    name: gamerec-config
+                - secretRef:
+                    name: gamerec-secrets
+                    optional: true
+              resources:
+                requests:
+                  # Embedding in batches of 200 is the peak; the rest of the run waits on Steam.
+                  memory: 600Mi
+                  cpu: 200m
+                limits:
+                  memory: 1Gi
+                  cpu: "1"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: corpus
+                  mountPath: /corpus
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            # Writable here, read-only in the API: the ingest is the only writer of the corpus, the
+            # name index and the checkpoint.
+            - name: corpus
+              persistentVolumeClaim:
+                claimName: corpus
+            - name: tmp
+              emptyDir: {}

@@ -1,0 +1,74 @@
+# The Initial Fill (D14, ADR-0005). Not applied with the rest: `kubectl apply -f deploy/k8s/` is not
+# recursive, so everything in manual/ is a deliberate, one-off act.
+#
+#   kubectl apply -f deploy/k8s/manual/fill.yaml
+#
+# It runs for about three days at Steam's sustained rate, and the corpus is searchable throughout,
+# because the fill is ordered by popularity -- the games people actually ask for arrive in the first
+# hours. If the pod dies, the run resumes from the checkpoint; if the Job itself needs replacing,
+# delete it and re-apply, which also resumes. Nothing here is a fresh start.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gamerec-fill
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/name: gamerec-ingest
+    app.kubernetes.io/part-of: gamerec
+    app.kubernetes.io/component: fill
+spec:
+  # No activeDeadlineSeconds: this one is meant to run for days. The nightly CronJob has a deadline
+  # because a wedged nightly run blocks the next one; nothing is queued behind the fill.
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gamerec-ingest
+        app.kubernetes.io/part-of: gamerec
+        app.kubernetes.io/component: fill
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: fill
+          image: ghcr.io/deviousdrops/gamerec-api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "ingest.run"]
+          # The whole catalogue. SteamSpy orders it by owner estimates, which is used for ordering
+          # and never as data (D14).
+          args: ["--limit", "180000"]
+          envFrom:
+            - configMapRef:
+                name: gamerec-config
+            - secretRef:
+                name: gamerec-secrets
+                optional: true
+          resources:
+            requests:
+              memory: 600Mi
+              cpu: 200m
+            limits:
+              memory: 1Gi
+              cpu: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: corpus
+          persistentVolumeClaim:
+            claimName: corpus
+        - name: tmp
+          emptyDir: {}

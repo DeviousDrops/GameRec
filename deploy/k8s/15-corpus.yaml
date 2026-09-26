@@ -1,0 +1,22 @@
+# The Game Document Store, the name index and the checkpoint (D9, D14). The ingest writes it, the API
+# reads it, and MinDB is rebuildable from it -- which is the whole derived-index stance (ADR-0003).
+#
+# ReadWriteOnce is honest about what the storage can do, not a claim that only one pod uses it: on a
+# single-node cluster every pod mounting this volume lands on that node, so the API and the ingest
+# share it. That stops being true the moment a second node exists, which is recorded in DECISIONS.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: corpus
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/part-of: gamerec
+    app.kubernetes.io/component: corpus
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # ~177k documents at roughly 1 KB each, with room for the append-only history between
+      # compactions (D9).
+      storage: 5Gi
