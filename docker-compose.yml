@@ -1,27 +1,25 @@
 # Local development stack. Production is k8s; see deploy/k8s.
 services:
   mindb:
-    build:
-      context: deploy/dev
-      dockerfile: mindb.Dockerfile
+    # A released tag, never latest (D19). The image is multi-arch, so the same tag runs here and
+    # on the arm64 VM.
+    image: ghcr.io/deviousdrops/mindb:v0.1.0
     command:
       - "-addr=:50051"
       - "-dims=384"          # bge-small-en-v1.5
       - "-capacity=5000"     # dev only; production is 200000 (D21)
       - "-snapshot=/data/mindb.snap"
       - "-snapshot-interval=60s"
+      # No -wal flag: unset means <snapshot>.wal, so the log is on without being asked for (-wal=off
+      # would disable it). It improves MinDB's own crash durability; it does not make MinDB the
+      # source of truth (D13).
     volumes:
       - mindb-data:/data
     ports:
       - "50051:50051"
-    healthcheck:
-      # The server binds :50051 only after the snapshot has loaded, so a successful
-      # connection already means "data is ready". D-note: Phase 3 uses grpc.health.v1 on :50052.
-      test: ["CMD", "nc", "-z", "localhost", "50051"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 10s
+      - "50052:50052"        # grpc.health.v1, which Phase 3 uses as the readiness probe
+    # No healthcheck: the published image is distroless, so it carries no shell and no nc to run
+    # one with. The API blocks on channel readiness at startup instead (MinDBClient.wait_ready).
 
   api:
     build:
@@ -37,7 +35,7 @@ services:
       - "8000:8000"
     depends_on:
       mindb:
-        condition: service_healthy
+        condition: service_started
 
 volumes:
   mindb-data:
