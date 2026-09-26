@@ -133,6 +133,12 @@ walkthrough, and the list of failure modes that were actually exercised rather t
 on a VM is [deploy/vm/README.md](deploy/vm/README.md): one idempotent bootstrap script, the memory
 arithmetic, and the Oracle Cloud traps that present as anything but their cause.
 
+[docs/failure-modes.md](docs/failure-modes.md) is the runbook: what breaks, what it looks like from
+outside, what recovers on its own and what needs a human. Each entry says whether it was exercised or
+only reasoned about, because a runbook that does not distinguish the two gets trusted in the wrong
+place. Measured latency, labelled with the CPU and the MinDB kernel that produced it, is in
+[bench/README.md](bench/README.md).
+
 `ingest.run` is safe to interrupt and safe to rerun. It resumes from `data/checkpoint.json`, paces
 itself against Steam, and takes new appids before refreshes, so a stop halfway never costs the games
 it had not reached yet. It refuses to run at all if the checkpoint was written by a different

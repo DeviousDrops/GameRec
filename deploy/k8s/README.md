@@ -88,6 +88,10 @@ k3d v5.9.0, k3s v1.35.5, single node:
   `/livez` still answers `200`, and both API pods stay up with zero restarts. Scaling MinDB back
   restored all 10 vectors from the snapshot on its PVC.
 
+The same list read from the other direction — failure first, then symptom and recovery — is
+[../../docs/failure-modes.md](../../docs/failure-modes.md), including the ones that are reasoned
+about rather than exercised.
+
 ## Deliberately not here yet
 
 - **A hostname.** `50-ingress.yaml` carries `gamerec.example.com`, which matches a Host header that
