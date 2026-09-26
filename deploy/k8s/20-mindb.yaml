@@ -107,10 +107,69 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+
+        # Backup sidecar (ADR-0002, D20). In this pod rather than in a CronJob of its own because the
+        # snapshot lives on a ReadWriteOnce volume: a separate pod could only mount it by being
+        # scheduled onto the same node, which is true today and is not something to depend on.
+        #
+        # It reacts to the snapshot's mtime, so a backup is one generation behind the vectors at most
+        # -snapshot-interval apart, and nothing has to coordinate the two schedules. Both mounts are
+        # read-only: a process whose job is to copy data out has no business writing any.
+        - name: backup
+          image: ghcr.io/deviousdrops/gamerec-api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "ops.backup"]
+          # 60s matches -snapshot-interval. Watching by mtime means the poll costs one stat() and a
+          # missed tick just means the next one picks the snapshot up.
+          args: ["--snapshot=/data/mindb.snap", "--watch=60"]
+          envFrom:
+            - configMapRef:
+                name: gamerec-config
+            - secretRef:
+                name: gamerec-secrets
+                optional: true
+          # No probes. A sidecar that cannot reach R2 must not be able to restart MinDB, and a pod
+          # whose backup is failing while it serves queries perfectly well is not unready -- the
+          # alerting for this is "the newest generation is old", which lives outside the cluster.
+          #
+          # With no R2 credentials this container exits 1 and lands in CrashLoopBackOff. That is the
+          # intended behaviour: a cluster that is serving traffic and quietly taking no backups is
+          # the state worth being loud about, and MinDB keeps running either way.
+          resources:
+            requests:
+              # It holds one snapshot in memory at a time: ~310 MB at full capacity, plus boto3.
+              memory: 450Mi
+              cpu: 50m
+            limits:
+              memory: 700Mi
+              cpu: 500m
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              readOnly: true
+            # For the checkpoint, which is what decides whether a snapshot is worth a generation at
+            # all: a run in flight leaves it pending, and a generation built on a pending checkpoint
+            # is one no restore may use.
+            - name: corpus
+              mountPath: /corpus
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: mindb-data
+        - name: corpus
+          persistentVolumeClaim:
+            claimName: corpus
+            readOnly: true
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

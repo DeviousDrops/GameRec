@@ -13,6 +13,10 @@ Hardened per Phase 2. The properties that hold, and why each one is load-bearing
     honest         The checkpoint is marked complete only after Snapshot succeeds, so a restore never
                    pairs a snapshot with a checkpoint claiming more than it holds (ADR-0002).
 
+    backed up      The document store is pushed to object storage at the end of a run, successful or
+                   not. MinDB is derived and the documents are not, so this is the only copy of
+                   anything here that a reindex cannot rebuild (D13, ADR-0003).
+
     exclusive      A lease in object storage, renewed at every batch boundary, so a manual run
                    started beside the CronJob exits instead of doubling the request rate (D17, D20).
                    With no object storage configured the run says so and proceeds -- that is a
@@ -41,6 +45,7 @@ from gamerec.names import (
 from gamerec.stamp import Stamp, StampMismatch, assert_ingestable
 from ingest.steam import FetchFailed, Popular, fetch_details, fetch_popular
 from ingest.throttle import RateLimiter
+from ops import backup
 
 log = logging.getLogger("ingest")
 
@@ -136,7 +141,13 @@ def main() -> int:
             return 0
 
     try:
-        return _run(args, config, embedder, current, recorded, lease)
+        result = _run(args, config, embedder, current, recorded, lease)
+        if store_r2 is not None:
+            # Inside the lease, and after the run either way: the document store is the only thing
+            # here that nothing can rebuild (D13, ADR-0003), so a run that failed halfway still has
+            # documents worth pushing. MinDB's own backup is the sidecar's job, on its own clock.
+            backup.sync_documents(store_r2, config)
+        return result
     finally:
         if lease is not None:
             lease.release()

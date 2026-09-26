@@ -15,6 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY gamerec/ gamerec/
 COPY api/ api/
 COPY ingest/ ingest/
+# The backup and restore entrypoints. Same image again: they have to agree with the ingest about
+# where the checkpoint lives and what a complete one means (D37).
+COPY ops/ ops/
 COPY clients/generated/ clients/generated/
 
 # Bake the model into the image. Downloading it at startup would make a cold pod wait on
