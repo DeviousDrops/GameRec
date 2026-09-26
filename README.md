@@ -3,7 +3,7 @@
 A RAG-based Steam game recommendation service. Describe what you feel like playing — or name a game you
 liked — and it returns games from the corpus, with a short explanation of why each one fits.
 
-The vector backend is [MinDB](https://github.com/typicallhavok/mindb), an embedded exact-kNN store
+The vector backend is [MinDB](https://github.com/DeviousDrops/mindb), an embedded exact-kNN store
 written in Go: one flat in-memory slab of vectors with an id map, a free list for reuse, and whole-file
 snapshots for durability. GameRec talks to it over FlatBuffers-on-gRPC. Everything runs on a single ARM
 VM under k3s.
@@ -12,12 +12,12 @@ VM under k3s.
 >
 > **MinDB holds no data that is not reproducible from R2.**
 >
-> MinDB does not yet have a write-ahead log — one is in flight upstream — so it is treated as a
-> *derived index*: the source of truth is the Game Document Store in object storage, and recovery is the
-> last backup generation plus an idempotent re-ingest. **The rule holds regardless.** A WAL improves
-> MinDB's own crash durability; it does not make MinDB the source of truth, and it does not repeal this
-> rule. If anything ever becomes MinDB-only, the rule is void and durability must be revisited before
-> that change ships. See [ADR-0003](docs/adr/0003-mindb-is-a-derived-index.md).
+> MinDB is treated as a *derived index*: the source of truth is the Game Document Store in object
+> storage, and recovery is the last backup generation plus an idempotent re-ingest. MinDB gained a
+> write-ahead log in `v0.1.0`, and **the rule holds regardless.** A WAL improves MinDB's own crash
+> durability; it does not make MinDB the source of truth, and it does not repeal this rule. If anything
+> ever becomes MinDB-only, the rule is void and durability must be revisited before that change ships.
+> See [ADR-0003](docs/adr/0003-mindb-is-a-derived-index.md).
 
 ## Architecture
 
@@ -25,11 +25,11 @@ VM under k3s.
 flowchart TB
     U(["user"])
 
-    subgraph vm["single VM &middot; k3s &middot; arm64"]
+    subgraph vm["single VM &middot; k3s &middot; x86_64"]
         API["Steam-RAG API<br/>FastAPI Deployment<br/>embeds the query in-process<br/>holds names.json in memory"]
         SC["backup sidecar"]
-        ING["ingest<br/>CronJob 20:30 UTC"]
-        MDB[("MinDB<br/>StatefulSet replicas 1<br/>384-dim &middot; capacity 200k")]
+        ING["ingest<br/>CronJob 03:17 UTC"]
+        MDB[("MinDB<br/>Deployment &middot; Recreate &middot; replicas 1<br/>384-dim &middot; capacity 200k")]
     end
 
     GROQ(["Groq"])
@@ -39,10 +39,11 @@ flowchart TB
     U -->|"mood query and/or seed game"| API
     API <-->|"Search &middot; Get"| MDB
     API -->|"narrate"| GROQ
-    API -->|"names.json"| R2
+    API -->|"names.json"| PVC[("corpus PVC")]
     ING -->|"~35 req/min"| STEAM
     ING -->|"upsert &middot; snapshot"| MDB
-    ING -->|"documents"| R2
+    ING -->|"documents"| PVC
+    ING -->|"documents &middot; name index"| R2
     SC -.->|"reads PVC"| MDB
     SC -->|"backups"| R2
     R2 -.->|"restore / reindex"| MDB
@@ -70,18 +71,19 @@ reason — "*Half-Life 3* hasn't been ingested yet" beats a bare "not found".
 
 ## Status
 
-**Phase 1 — local pipeline.** See [DECISIONS.md](DECISIONS.md) for the reasoning behind every
-non-obvious choice, [CONTEXT.md](CONTEXT.md) for the vocabulary, and [docs/adr/](docs/adr/) for the
+**Phase 6 — going live on a real VM.** See [DECISIONS.md](DECISIONS.md) for the reasoning
+behind every non-obvious choice, [CONTEXT.md](CONTEXT.md) for the vocabulary, and [docs/adr/](docs/adr/) for the
 decisions that were hard to reverse.
 
 | Phase | |
 |---|---|
 | 0 · Plan | done — MinDB API surface mapped, design settled |
-| 1 · Local pipeline | in progress |
-| 2 · Ingest hardening | idempotency, checkpoint, rate limits, model-version checks |
-| 3 · Containerise + k8s | manifests on local k3d |
-| 4 · CI + VM deploy | GitHub Actions, k3s bootstrap, backups |
-| 5 · Polish | benchmarks, failure modes |
+| 1 · Local pipeline | done — ingest, search and narration working against the released MinDB image |
+| 2 · Ingest hardening | done — resumable, idempotent, paced and bounded, with a model-stamp guard |
+| 3 · Containerise + k8s | done — plain manifests, verified end to end on k3d |
+| 4 · CI + VM deploy | done — CI, R2 backups and a verified restore, k3s bootstrap |
+| 5 · Polish | done — labelled benchmarks, a failure-mode runbook, a post-deploy smoke test |
+| 6 · Live | in progress — bringing up the Azure VM, first deploy with real R2 credentials (D46) |
 
 ## Things worth knowing up front
 
@@ -95,23 +97,59 @@ decisions that were hard to reverse.
   popularity, so the most-wanted games are searchable within hours.
   ([ADR-0005](docs/adr/0005-initial-fill-is-resumable-and-the-corpus-starts-partial.md))
 - **Single instance means visible downtime.** MinDB deploys with the `Recreate` strategy; the API
-  returns `503` with `Retry-After` while it restarts.
+  returns `503` with `Retry-After` while it restarts. Its volume is `ReadWriteOnce`, so a rolling
+  update could not work even if one were wanted: the surge pod would wait for a volume it cannot get.
+- **MinDB has no authentication.** It is an embedded store that happens to speak gRPC. Nothing outside
+  the cluster can reach it, and inside it a NetworkPolicy allows only the API and the ingest — with no
+  credential to check, reachability is the access control.
 - **Benchmarks are labelled by architecture, and the label is checked.** MinDB's int8 cascade has an
-  AVX2 kernel that does not exist on ARM, so the deployed service is slower than any x86 figure for the
-  same code. `/health` reports the kernel MinDB actually selected — `pure-go` on the ARM VM, `avx2` on
-  an x86 dev box — so every published number can be tied to a kernel rather than an assumption.
-  ([ADR-0006](docs/adr/0006-arm64-host-and-architecture-labelled-benchmarks.md))
-- **MinDB is consumed, not vendored.** It is pinned to a released tag and pulled as a multi-arch
-  (`linux/amd64` + `linux/arm64`) image from GHCR, so the same tag runs on a dev laptop and on the
-  Ampere VM. MinDB's own source, Dockerfile and CI live in its repo and are not modified from here.
+  AVX2 kernel that does not exist on ARM, so the same code is materially faster on one host than another.
+  `/health` reports the kernel MinDB actually selected, and every number in
+  [bench/README.md](bench/README.md) carries it (a mood query is 7.6 ms at p50 against a small corpus,
+  and Search alone is 4.0 ms at 200,000 vectors). The deployed host is x86_64 and reports `avx2`, so the
+  published tables describe the right *kernel* — on a different CPU, which the tables also say. The
+  rule was written for an ARM host that the project no longer has, and it survived the host changing
+  intact, which is the argument for writing it down.
+  ([ADR-0006](docs/adr/0006-arm64-host-and-architecture-labelled-benchmarks.md), D46)
+- **A restore verifies before it writes, and refuses rather than guesses.** Backups are generations:
+  one prefix per snapshot, a `manifest.json` of sha256s, and a `COMPLETE` marker written last that is
+  the only thing a restore trusts. A generation with a single flipped byte fails its manifest check and
+  nothing is written — a snapshot that is merely *missing vectors* would look valid to everything
+  downstream. ([ADR-0002](docs/adr/0002-backup-generation-is-atomic.md))
+- **MinDB is consumed, not vendored.** The dev stack and every deployment run
+  `ghcr.io/deviousdrops/mindb:v0.1.0` — a released tag, never `latest`, built multi-arch for
+  `linux/amd64` and `linux/arm64`, so the same tag runs on a dev laptop and on the VM. The API image is
+  amd64 only, because the host is x86_64 and nothing pulls the other leg (D45). MinDB's
+  own source, Dockerfile and CI live in its repo and are not modified from here. The FlatBuffers schema
+  in `clients/` is pinned to the same tag (see [clients/README.md](clients/README.md)).
 
 ## Development
 
 Requires Docker and Python 3.13. Configuration is environment variables; secrets never live in the repo.
 
 ```bash
-docker compose up        # MinDB + API locally
+docker compose up                 # MinDB + API locally
+python -m ingest.run --limit 200  # fetch, embed and upsert a popularity-ordered slice
+python -m ingest.reindex          # rebuild every vector from documents.jsonl, no Steam requests
+pytest -q                         # unit tests; the codec test needs MinDB up
 ```
+
+Running it on Kubernetes is [deploy/k8s/README.md](deploy/k8s/README.md): plain manifests, a k3d
+walkthrough, and the list of failure modes that were actually exercised rather than assumed. Putting it
+on a VM is [deploy/vm/README.md](deploy/vm/README.md): one idempotent bootstrap script, the memory
+arithmetic, and the Oracle Cloud traps that present as anything but their cause.
+
+[docs/failure-modes.md](docs/failure-modes.md) is the runbook: what breaks, what it looks like from
+outside, what recovers on its own and what needs a human. Each entry says whether it was exercised or
+only reasoned about, because a runbook that does not distinguish the two gets trusted in the wrong
+place. Measured latency, labelled with the CPU and the MinDB kernel that produced it, is in
+[bench/README.md](bench/README.md).
+
+`ingest.run` is safe to interrupt and safe to rerun. It resumes from `data/checkpoint.json`, paces
+itself against Steam, and takes new appids before refreshes, so a stop halfway never costs the games
+it had not reached yet. It refuses to run at all if the checkpoint was written by a different
+embedding model — `ingest.reindex --compact` is the way out of that, and it rebuilds from the
+documents already on disk rather than re-fetching from Steam.
 
 ## Licence
 

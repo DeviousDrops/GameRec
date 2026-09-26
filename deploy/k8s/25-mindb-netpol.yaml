@@ -1,0 +1,34 @@
+# MinDB speaks unauthenticated gRPC: anything that can reach port 50051 can read the whole index and
+# overwrite it. Since there is no credential to get wrong, network reachability *is* the access
+# control, and a namespace where any pod can dial any other is the same as no access control.
+#
+# Deny by default for MinDB's own ingress, then allow exactly the API and the ingest.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mindb-allow-gamerec-only
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/part-of: gamerec
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mindb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gamerec-api
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gamerec-ingest
+      ports:
+        - port: 50051
+          protocol: TCP
+    # The kubelet probes the health port from the node, which no podSelector matches. Left open to
+    # every source rather than guessed at: it exposes liveness, not data.
+    - ports:
+        - port: 50052
+          protocol: TCP

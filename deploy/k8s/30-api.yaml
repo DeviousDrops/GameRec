@@ -1,0 +1,132 @@
+# The query service. Same image as the ingest, so the two cannot disagree about the embedding model
+# or the render template (D31).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gamerec-api
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/name: gamerec-api
+    app.kubernetes.io/part-of: gamerec
+    app.kubernetes.io/component: api
+spec:
+  # One. Two was for availability that a single node cannot provide anyway, and each replica holds its
+  # own copy of the ONNX model -- ~350 MB of a 4 GiB host to insure against a failure mode that takes
+  # the node with it (D47). maxSurge keeps a rollout from being downtime: the new pod starts, passes
+  # /readyz, and only then does the old one go.
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gamerec-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gamerec-api
+        app.kubernetes.io/part-of: gamerec
+        app.kubernetes.io/component: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001        # the uid the image creates; see deploy/api.Dockerfile
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # Built from deploy/api.Dockerfile. Phase 4's CI publishes this tag; until then it is
+          # imported into the local cluster by hand, which is why the pull policy is IfNotPresent
+          # rather than Always.
+          image: ghcr.io/deviousdrops/gamerec-api:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: gamerec-config
+            # Optional on purpose: without a Groq key the service still answers, it just does not
+            # narrate (D6). A missing secret should not be the difference between up and down.
+            - secretRef:
+                name: gamerec-secrets
+                optional: true
+          # The model is baked into the image but still loads into memory at startup, so a cold pod
+          # takes a few seconds to answer anything.
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 3
+            failureThreshold: 40
+          # Liveness must not depend on MinDB. /livez touches nothing: a probe that called MinDB
+          # would turn a MinDB restart into an API restart, killing the component that was fine.
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          # Readiness is "can I answer a query", which does need MinDB, so this one checks it. During
+          # a MinDB restart both API pods go unready and the Service has no endpoints -- that is the
+          # visible downtime D7 accepted, and it beats serving errors.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+          resources:
+            requests:
+              # The ONNX model and its runtime dominate; the API holds no corpus of its own.
+              memory: 500Mi
+              cpu: 100m
+            limits:
+              memory: 900Mi
+              # Half the box. The node has 2 vCPU, and an embedding burst that takes both of them
+              # starves MinDB, which is the thing the embedding is about to call.
+              cpu: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: corpus
+          persistentVolumeClaim:
+            claimName: corpus
+            # The API never writes the corpus; only the ingest does. Enforced here as well as in the
+            # mount, so a code change cannot quietly start writing.
+            readOnly: true
+        # onnxruntime wants a writable /tmp, and the root filesystem is read-only. The model itself
+        # lives at /opt/models precisely so that this emptyDir cannot hide it.
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gamerec-api
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/name: gamerec-api
+    app.kubernetes.io/part-of: gamerec
+spec:
+  # ClusterIP plus a port-forward for local work. The Ingress belongs with the VM, a hostname and
+  # TLS, which is Phase 4 -- an Ingress for a host nobody owns yet would be decoration.
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: gamerec-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

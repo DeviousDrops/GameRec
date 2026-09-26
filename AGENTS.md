@@ -1,7 +1,7 @@
 # GameRec
 
-RAG-based Steam game recommendation service, backed by [MinDB](https://github.com/typicallhavok/mindb)
-(an embedded LSM-style vector/storage engine in Go) over FlatBuffers-on-gRPC, deployed on
+RAG-based Steam game recommendation service, backed by [MinDB](https://github.com/DeviousDrops/mindb)
+(an embedded exact-kNN vector store in Go) over FlatBuffers-on-gRPC, deployed on
 single-VM k3s.
 
 ## Commits and authorship
@@ -18,9 +18,9 @@ single-VM k3s.
   chars, a body explaining *why* when the change isn't self-evident. No emoji headers, no
   bullet-point walls, no AI boilerplate.
 - Small, reviewable commits. One logical change each.
-- `.claude/` is tracked deliberately — it's tooling config, not authorship evidence. Machine-local
-  overrides (`settings.local.json`, plugin scratch state) stay ignored; shared config goes in
-  `.claude/settings.json`.
+- Shared agent config belongs in `.claude/settings.json`, tracked deliberately — it's tooling config,
+  not authorship evidence. Machine-local overrides (`settings.local.json`, plugin scratch state) stay
+  ignored, which is everything `.claude/` holds today.
 
 ## Agent skills
 

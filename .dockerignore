@@ -1,0 +1,23 @@
+# The build context is what Docker has to read before it starts. data/ is the corpus, which is both
+# large and irrelevant to the image -- the deployed pod gets it from a volume, not from a layer.
+.git/
+.gitignore
+data/
+docs/
+tests/
+scripts/
+clients/*.fbs
+clients/README.md
+deploy/
+docker-compose.yml
+*.md
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+Claude outputs/
+scratchpad/

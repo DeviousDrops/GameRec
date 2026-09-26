@@ -1,0 +1,12 @@
+# Runtime. Versions are the ones this was actually built and tested against.
+# flatbuffers must match MinDB's Go library and the flatc used for codegen (clients/README.md).
+fastapi==0.141.1
+uvicorn==0.52.4
+fastembed==0.8.0
+flatbuffers==25.12.19
+grpcio==1.84.0
+httpx==0.28.1
+numpy==2.5.2
+rapidfuzz==3.14.6
+# Object storage is R2 over the S3 API (D20). Only the lease and the backup path import it.
+boto3==1.43.83

@@ -1,0 +1,35 @@
+# Non-secret configuration, mirroring gamerec/config.py. Every value here is also a default in the
+# code, so a missing key degrades to the documented default rather than to a crash (requirement 6).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gamerec-config
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/part-of: gamerec
+data:
+  MINDB_ADDR: "mindb:50051"
+  CORPUS_DIR: "/corpus"
+  TOP_K: "5"
+  MOOD_WEIGHT: "0.6"
+  REVIEW_FLOOR: "50"
+  GROQ_MODEL: "llama-3.3-70b-versatile"
+
+  # Ingest pacing (D17). Deliberately under Steam's measured ceiling: the penalty for guessing high
+  # is a 429 and a 20-30s backoff, which makes the whole run slower than pacing correctly would.
+  STEAM_REQUESTS_PER_MIN: "35"
+  STEAM_BURST: "5"
+  # New appids first, then refreshes up to this cap, so a big Steam change day cannot starve out the
+  # new games users actually notice (D15).
+  MAX_UPDATES_PER_RUN: "500"
+  # How much work a crash can destroy, in batches of 200 (D7).
+  SNAPSHOT_EVERY_BATCHES: "10"
+
+  # Object storage (D20). The endpoint and bucket are not secrets; the credentials are, and live in
+  # the Secret. Leave these empty and the ingest runs without a lease and says so, while the backup
+  # sidecar refuses to start -- which is the right noise for a cluster taking no backups.
+  R2_ENDPOINT: ""
+  R2_BUCKET: "gamerec"
+  # Comfortably longer than a batch takes at 35 requests a minute, so a run renews long before it
+  # expires; short enough that a pod killed mid-run does not block tomorrow night (D17).
+  INGEST_LEASE_TTL: "1800"

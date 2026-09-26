@@ -1,0 +1,70 @@
+# Rebuild every vector from the Game Document Store (D9, D13, ADR-0003). No Steam requests: this is
+# what makes a model or template change affordable instead of a three-day re-fetch.
+#
+#   kubectl delete job gamerec-reindex -n gamerec --ignore-not-found
+#   kubectl apply -f deploy/k8s/manual/reindex.yaml
+#
+# Run it when the embedding model changes -- an ingest run refuses to start in that case and says so
+# (D31) -- or when a snapshot is lost and the WAL cannot cover it. MinDB must already be running with
+# -dims matching the new model, since dimensions and capacity are fixed at boot (D21).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gamerec-reindex
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/name: gamerec-ingest
+    app.kubernetes.io/part-of: gamerec
+    app.kubernetes.io/component: reindex
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gamerec-ingest
+        app.kubernetes.io/part-of: gamerec
+        app.kubernetes.io/component: reindex
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: reindex
+          image: ghcr.io/deviousdrops/gamerec-api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "ingest.reindex"]
+          # --compact rewrites documents.jsonl to one line per appid. Left off by default: it is a
+          # full rewrite of the source of truth, which is not something to do by accident.
+          envFrom:
+            - configMapRef:
+                name: gamerec-config
+          resources:
+            requests:
+              memory: 600Mi
+              cpu: 500m
+            limits:
+              # Re-embedding the whole corpus is CPU-bound and nothing waits on it, so it gets more
+              # CPU than the nightly ingest and the same memory.
+              memory: 1Gi
+              cpu: "2"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: corpus
+          persistentVolumeClaim:
+            claimName: corpus
+        - name: tmp
+          emptyDir: {}

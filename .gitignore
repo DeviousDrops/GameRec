@@ -8,7 +8,7 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
-# Secrets — never commit. deploy/k8s/secret.template.yaml is the tracked example.
+# Secrets — never commit. deploy/k8s/manual/secret.template.yaml is the tracked example.
 .env
 .env.*
 !.env.example
@@ -26,6 +26,11 @@ snapshots/
 .claude/settings.local.json
 .claude/.headroom_*
 .serena/
+
+# Agent scratch output. Transcripts, drafts and anything an assistant dumps mid-session — none of it
+# is part of the project.
+Claude outputs/
+scratchpad/
 
 # Editors / OS
 .idea/

@@ -1,0 +1,49 @@
+# Publishes ghcr.io/deviousdrops/gamerec-api on a version tag. Tags only: an image that deploys is an
+# image someone chose to cut, not whatever landed on a branch (D19 makes the same argument for MinDB).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # amd64 only (D45). The deploy target is x86 and there is no ARM hardware to run the other leg
+      # on, so building it means paying for a QEMU cross-build nothing pulls. Adding arm64 back is one
+      # line here plus setup-qemu-action, which is why it is worth stating as reversible.
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/deviousdrops/gamerec-api
+          # v0.2.0 publishes 0.2.0 and 0.2. No `latest`: a manifest that says latest is a manifest
+          # that cannot say what it deployed.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/api.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
