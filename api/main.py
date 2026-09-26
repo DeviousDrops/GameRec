@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
+import grpc
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 
@@ -22,22 +23,83 @@ app = FastAPI(title="GameRec", version="0.1.0")
 
 state: dict = {}
 
+# MinDB deploys with the Recreate strategy, so a rollout is visible downtime measured in seconds
+# (D7). Five is long enough to be worth honouring and short enough that a client retrying on it
+# feels like a pause rather than an outage.
+RETRY_AFTER_SECONDS = 5
+
+
+def _unavailable(error: grpc.RpcError) -> HTTPException:
+    """503 with Retry-After, not 500: MinDB restarting is expected, and a 500 reads as a bug."""
+    code = error.code().name.lower() if error.code() else "unknown"
+    log.warning("MinDB call failed: %s", code)
+    return HTTPException(
+        503, f"MinDB is unavailable ({code}); it may be restarting",
+        headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+    )
+
+
+def _names() -> NameIndex:
+    """The name index, reloaded when the file underneath it changes.
+
+    The nightly ingest rewrites names.json while the API keeps running (D14), so an index read once
+    at startup would go stale by exactly the games a user is most likely to ask about -- the new
+    ones. One stat() per request against a file that changes once a night is a fair trade.
+    """
+    try:
+        mtime = config.names_path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return state["names"]
+    if mtime != state.get("names_mtime"):
+        state["names"] = NameIndex.load(config.names_path)
+        state["names_mtime"] = mtime
+        log.info("name index loaded: %d entries", len(state["names"]))
+    return state["names"]
+
 
 @app.on_event("startup")
 def startup() -> None:
     state["embedder"] = Embedder()
     state["mindb"] = MinDBClient(config.mindb_addr)
-    state["mindb"].wait_ready()
-    state["names"] = (
-        NameIndex.load(config.names_path) if config.names_path.exists() else NameIndex([])
-    )
-    log.info("ready: %d names, corpus %d", len(state["names"]), state["mindb"].stats().vector_count)
+    state["names"] = NameIndex([])
+    try:
+        state["mindb"].wait_ready()
+        log.info("ready: %d names, corpus %d", len(_names()), state["mindb"].stats().vector_count)
+    except (grpc.FutureTimeoutError, grpc.RpcError):
+        # Deliberately not fatal. Exiting here means a CrashLoopBackOff whose backoff outlasts the
+        # MinDB restart that caused it, so the API would still be down after MinDB came back.
+        # /readyz keeps traffic away until MinDB answers, which is what readiness is for.
+        log.warning("MinDB at %s is not answering yet; serving nothing until it does",
+                    config.mindb_addr)
+
+
+@app.get("/livez")
+def livez() -> dict:
+    """Liveness: is this process working? It must not touch MinDB.
+
+    A liveness probe that calls a dependency converts that dependency being down into this pod
+    being killed -- restarting the one component that was still fine.
+    """
+    return {"status": "alive"}
+
+
+@app.get("/readyz")
+def readyz() -> dict:
+    """Readiness: can this process answer a query? That needs MinDB, so it is checked."""
+    try:
+        stats = state["mindb"].stats()
+    except grpc.RpcError as error:
+        raise _unavailable(error) from error
+    return {"status": "ready", "corpus_size": stats.vector_count}
 
 
 @app.get("/health")
 def health() -> dict:
     """Reports the kernel MinDB actually selected, so benchmark numbers can be tied to one."""
-    stats = state["mindb"].stats()
+    try:
+        stats = state["mindb"].stats()
+    except grpc.RpcError as error:
+        raise _unavailable(error) from error
     return {
         "status": "ok",
         "corpus_size": stats.vector_count,
@@ -52,7 +114,7 @@ def health() -> dict:
             "wal_enabled": stats.wal_enabled,
             "wal_healthy": stats.wal_healthy,
         },
-        "name_index_size": len(state["names"]),
+        "name_index_size": len(_names()),
     }
 
 
@@ -67,7 +129,7 @@ def recommend(
         raise HTTPException(400, "give a mood query, a seed game, or both")
 
     top_k = k or config.top_k
-    embedder, mindb, names = state["embedder"], state["mindb"], state["names"]
+    embedder, mindb, names = state["embedder"], state["mindb"], _names()
 
     query_vector, seed_entry, exclude = None, None, set()
     if q:
@@ -78,7 +140,10 @@ def recommend(
             raise HTTPException(404, resolution.reason or f"unknown game {seed!r}")
         seed_entry = resolution.entry
         seed_id = f"appid:{seed_entry.appid}"
-        vectors = mindb.get([seed_id])
+        try:
+            vectors = mindb.get([seed_id])
+        except grpc.RpcError as error:
+            raise _unavailable(error) from error
         if seed_id not in vectors:
             raise HTTPException(404, f"{seed_entry.name} is in the name index but not in MinDB")
         exclude.add(seed_id)
@@ -91,7 +156,10 @@ def recommend(
             blend = config.mood_weight * query_vector + (1 - config.mood_weight) * seed_vector
             query_vector = blend / np.linalg.norm(blend)
 
-    hits = mindb.search(query_vector, top_k + len(exclude))
+    try:
+        hits = mindb.search(query_vector, top_k + len(exclude))
+    except grpc.RpcError as error:
+        raise _unavailable(error) from error
     results = []
     for hit in hits:
         if hit.id in exclude:
