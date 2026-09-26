@@ -32,7 +32,10 @@ jobs:
         with:
           images: ghcr.io/deviousdrops/gamerec-api
           # v0.2.0 publishes 0.2.0 and 0.2. No `latest`: a manifest that says latest is a manifest
-          # that cannot say what it deployed.
+          # that cannot say what it deployed. latest=false is load-bearing -- the action's default is
+          # latest=auto, which adds it for any semver tag, and v0.1.0 published one before this line
+          # existed.
+          flavor: latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
