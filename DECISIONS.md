@@ -589,3 +589,51 @@ of unchanged vectors nightly or leaving the snapshot backed up only as often as 
 possible — the corpus only ever appends — and is not worth the class of bug it invites: an offset agreed
 wrongly between two versions of this code yields a corpus that parses and lies. Whole-file upload of
 180 MB nightly is cheap, and R2 has no egress fee to make a restore expensive.
+
+## Measurement
+
+### D42 — Benchmarks run inside the image, in three separable modes
+
+**Context:** A latency figure is only useful if a slow one can be attributed. Three things are in the
+path of a query — the embedding model, MinDB's scan, FastAPI and the network — and they are each slow
+for different reasons. ADR-0006 already requires the architecture and MinDB kernel on every number.
+**Options:** (a) one end-to-end benchmark of `/recommend`; (b) three modes measuring the API, MinDB
+alone and the model alone, all runnable from the host; (c) (b), but the documented way to run them is
+inside the deployed image.
+**Choice:** (c), with the kernel label read from `/health` at the start of every run, and a
+`first->last tenth` column beside the percentiles.
+**Trade-off:** (a) cannot tell a slow model from a slow index, which is the only question a benchmark
+gets asked when it looks bad. (b) is what the code does and would still publish contaminated numbers:
+on this dev box the host Python embeds a query in ~40 ms and the same fastembed version inside the
+image does it in 3.9 ms, so a host-side table would be measuring a Windows Python install nobody
+deploys. The drift column is there because percentiles sort the samples and so hide a machine that
+degrades under sustained load — this laptop drifts from 52 ms to 265 ms on the host and holds flat in
+the container, which is the evidence for the rule rather than an assertion of it.
+
+### D43 — Search is timed against a synthetic 200k store, and recall is not claimed
+
+**Context:** Exact kNN scans every vector, so Search latency is linear in the corpus. The dev corpus
+is 200 documents; production is up to 200,000. A number from the first says nothing about the second.
+**Options:** (a) time Search against whatever the dev corpus holds and extrapolate; (b) fill a scratch
+MinDB with 200k random vectors and time against that; (c) wait for a real full corpus, which is three
+days of Steam requests.
+**Choice:** (b). `bench/synthetic.py` inserts normalised random vectors into a throwaway store, and
+refuses to run against one that already holds more than a thousand.
+**Trade-off:** random vectors are exactly right for latency — the scan does the same arithmetic
+whatever the vectors mean — and worthless for recall, so the tool does not report recall and the README
+says why. (a) understates by an order of magnitude at the scale that matters. (c) is the honest
+measurement and is not available yet; when it is, the same three modes produce it. The arm64 table
+stays empty until there is an A1 to fill it, because an x86 figure with a caveat attached is the
+mistake ADR-0006 exists to prevent.
+
+### D44 — The runbook says whether each failure was exercised or only reasoned about
+
+**Context:** `docs/failure-modes.md` collects what breaks and how it recovers. Some entries were made
+to happen and watched; others are read off the code.
+**Options:** (a) document all of them in one voice; (b) document only what was exercised; (c) document
+both and mark which is which.
+**Choice:** (c), with a one-line note under every heading.
+**Trade-off:** (a) is the dangerous one: an untested recovery path read in an emergency gets the same
+trust as a tested one, and the disk-full and node-reboot entries here are guesses about a VM that does
+not exist yet. (b) would leave the failures most likely to happen unwritten, since they are precisely
+the ones hardest to stage. The cost of (c) is a runbook that admits its own gaps, which is the point.

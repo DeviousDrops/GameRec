@@ -71,7 +71,7 @@ reason — "*Half-Life 3* hasn't been ingested yet" beats a bare "not found".
 
 ## Status
 
-**Phase 4 — deployable, backed up and restorable.** See [DECISIONS.md](DECISIONS.md) for the reasoning
+**Phase 5 — measured, and specific about what is untested.** See [DECISIONS.md](DECISIONS.md) for the reasoning
 behind every non-obvious choice, [CONTEXT.md](CONTEXT.md) for the vocabulary, and [docs/adr/](docs/adr/) for the
 decisions that were hard to reverse.
 
@@ -82,7 +82,7 @@ decisions that were hard to reverse.
 | 2 · Ingest hardening | done — resumable, idempotent, paced and bounded, with a model-stamp guard |
 | 3 · Containerise + k8s | done — plain manifests, verified end to end on k3d |
 | 4 · CI + VM deploy | done — CI, R2 backups and a verified restore, k3s bootstrap; not yet run on a real A1 |
-| 5 · Polish | benchmarks, failure modes |
+| 5 · Polish | done — labelled x86 benchmarks, a failure-mode runbook, a post-deploy smoke test; arm64 figures wait on the A1 |
 
 ## Things worth knowing up front
 
@@ -104,8 +104,10 @@ decisions that were hard to reverse.
 - **Benchmarks are labelled by architecture, and the label is checked.** MinDB's int8 cascade has an
   AVX2 kernel that does not exist on ARM, so the deployed service is slower than any x86 figure for the
   same code. `/health` reports the kernel MinDB actually selected — `pure-go` on the ARM VM, `avx2` on
-  an x86 dev box — so every published number can be tied to a kernel rather than an assumption.
-  ([ADR-0006](docs/adr/0006-arm64-host-and-architecture-labelled-benchmarks.md))
+  an x86 dev box — so every published number can be tied to a kernel rather than an assumption. The
+  x86 tables are in [bench/README.md](bench/README.md) (a mood query is 7.6 ms at p50 against a small
+  corpus, and Search alone is 4.0 ms at 200,000 vectors); the arm64 table is deliberately empty until
+  there is an A1 to fill it. ([ADR-0006](docs/adr/0006-arm64-host-and-architecture-labelled-benchmarks.md))
 - **A restore verifies before it writes, and refuses rather than guesses.** Backups are generations:
   one prefix per snapshot, a `manifest.json` of sha256s, and a `COMPLETE` marker written last that is
   the only thing a restore trusts. A generation with a single flipped byte fails its manifest check and
