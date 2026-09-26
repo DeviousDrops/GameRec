@@ -19,9 +19,16 @@ COPY clients/generated/ clients/generated/
 
 # Bake the model into the image. Downloading it at startup would make a cold pod wait on
 # huggingface.co, which turns an unrelated outage into a GameRec outage.
-RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+#
+# The path is explicit because fastembed's default is /tmp/fastembed_cache, and that is exactly the
+# directory a hardened pod mounts an emptyDir over -- which would hide the baked model and send the
+# process to huggingface.co after all. /opt/models is world-readable so the unprivileged runtime
+# user can load it, and nothing writes there at runtime.
+ENV FASTEMBED_CACHE_PATH=/opt/models
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')" \
+    && chmod -R a+rX /opt/models
 
 RUN useradd -u 10001 -m gamerec
-USER gamerec
+USER 10001
 EXPOSE 8000
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
