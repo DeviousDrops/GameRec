@@ -70,7 +70,7 @@ reason — "*Half-Life 3* hasn't been ingested yet" beats a bare "not found".
 
 ## Status
 
-**Phase 2 — ingest hardening.** See [DECISIONS.md](DECISIONS.md) for the reasoning behind every
+**Phase 3 — running on Kubernetes.** See [DECISIONS.md](DECISIONS.md) for the reasoning behind every
 non-obvious choice, [CONTEXT.md](CONTEXT.md) for the vocabulary, and [docs/adr/](docs/adr/) for the
 decisions that were hard to reverse.
 
@@ -79,7 +79,7 @@ decisions that were hard to reverse.
 | 0 · Plan | done — MinDB API surface mapped, design settled |
 | 1 · Local pipeline | done — ingest, search and narration working against the released MinDB image |
 | 2 · Ingest hardening | done — resumable, idempotent, paced and bounded, with a model-stamp guard |
-| 3 · Containerise + k8s | manifests on local k3d |
+| 3 · Containerise + k8s | done — plain manifests, verified end to end on k3d |
 | 4 · CI + VM deploy | GitHub Actions, k3s bootstrap, backups |
 | 5 · Polish | benchmarks, failure modes |
 
@@ -95,7 +95,11 @@ decisions that were hard to reverse.
   popularity, so the most-wanted games are searchable within hours.
   ([ADR-0005](docs/adr/0005-initial-fill-is-resumable-and-the-corpus-starts-partial.md))
 - **Single instance means visible downtime.** MinDB deploys with the `Recreate` strategy; the API
-  returns `503` with `Retry-After` while it restarts.
+  returns `503` with `Retry-After` while it restarts. Its volume is `ReadWriteOnce`, so a rolling
+  update could not work even if one were wanted: the surge pod would wait for a volume it cannot get.
+- **MinDB has no authentication.** It is an embedded store that happens to speak gRPC. Nothing outside
+  the cluster can reach it, and inside it a NetworkPolicy allows only the API and the ingest — with no
+  credential to check, reachability is the access control.
 - **Benchmarks are labelled by architecture, and the label is checked.** MinDB's int8 cascade has an
   AVX2 kernel that does not exist on ARM, so the deployed service is slower than any x86 figure for the
   same code. `/health` reports the kernel MinDB actually selected — `pure-go` on the ARM VM, `avx2` on
@@ -117,6 +121,9 @@ python -m ingest.run --limit 200  # fetch, embed and upsert a popularity-ordered
 python -m ingest.reindex          # rebuild every vector from documents.jsonl, no Steam requests
 pytest -q                         # unit tests; the codec test needs MinDB up
 ```
+
+Running it on Kubernetes is [deploy/k8s/README.md](deploy/k8s/README.md): plain manifests, a k3d
+walkthrough, and the list of failure modes that were actually exercised rather than assumed.
 
 `ingest.run` is safe to interrupt and safe to rerun. It resumes from `data/checkpoint.json`, paces
 itself against Steam, and takes new appids before refreshes, so a stop halfway never costs the games

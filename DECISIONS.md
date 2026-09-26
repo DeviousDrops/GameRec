@@ -453,3 +453,79 @@ attempts run out, and the run records those appids as `pending_ingest` and leave
 checkpoint. **A verdict is permanent; an outage is not**, and any code path that can turn the second
 into the first will eventually be given the chance. The cost is that a genuinely unreachable appid is
 retried every run, which is cheap and visible, unlike a permanent mislabel.
+
+### D33 — The corpus is one ReadWriteOnce volume, shared because there is one node
+
+**Context:** The ingest writes `documents.jsonl`, `names.json` and `checkpoint.json`; the API reads the
+name index; MinDB is rebuildable from the documents (D9, ADR-0003). In Kubernetes that means a volume
+mounted by a Deployment and by a CronJob at the same time.
+**Options:** (a) a `ReadWriteMany` volume, which on k3s means adding an NFS or Longhorn provisioner;
+(b) `ReadWriteOnce`, which works only while every pod lands on the same node; (c) put the corpus in
+object storage now and skip the volume.
+**Choice:** (b) for Phase 3, with (c) arriving in Phase 4 alongside R2 and backups (D20). The API mounts
+it `readOnly` at both the volume and the mount, so a code change cannot quietly start writing it.
+**Trade-off:** This is a single-node assumption written into the manifests, and it breaks the moment a
+second node exists — the ingest Job and the API pods would be scheduled apart and one of them would
+fail to mount. That is acceptable because the target is a single VM (D23) and because the real fix is
+R2, not a fight with `ReadWriteMany`: the corpus is a file that is written once a night and read
+rarely, which is what object storage is for.
+
+### D34 — Liveness never touches a dependency; readiness always does
+
+**Context:** MinDB restarts are expected and visible (D7). The API's probes decide what a restart does
+to it.
+**Options:** (a) one `/health` endpoint behind both probes; (b) split them, with liveness checking only
+the process and readiness checking MinDB; (c) make readiness ignore MinDB too, so the API keeps
+serving and returns 503 per request.
+**Choice:** (b). `/livez` touches nothing, `/readyz` calls `Stats`, and startup no longer exits when
+MinDB is unreachable.
+**Trade-off:** (a) is the common shape and it is a trap: a liveness probe that calls a dependency turns
+that dependency being down into *this* pod being killed, so a MinDB restart would restart the API too —
+and a CrashLoopBackOff whose backoff outlasts the restart leaves the API down after MinDB is back. The
+cost of (b) is that during a MinDB restart both API pods go unready and the Service has no endpoints,
+so callers see a connection failure rather than the 503 the code is ready to send. (c) would deliver
+that 503, at the price of a pod that advertises itself as able to serve when it cannot. Readiness
+means readiness; the 503 is for requests already in flight and for anything holding a connection.
+
+### D35 — MinDB is fronted by a NetworkPolicy, because it has no authentication
+
+**Context:** MinDB's gRPC API is unauthenticated by design — it is an embedded store that happens to
+speak over a socket. Anything that can reach port 50051 can read the whole index and overwrite it.
+**Options:** (a) rely on the Service being `ClusterIP`, so nothing outside the cluster can reach it;
+(b) add a default-deny NetworkPolicy allowing only the API and the ingest; (c) ask upstream for auth.
+**Choice:** (b) as well as (a). With no credential to check, network reachability *is* the access
+control, and a namespace where any pod can dial any other is the same as none. The health port stays
+open to every source because the kubelet probes it from the node, which no pod selector matches.
+**Trade-off:** (c) is the real fix and it is not GameRec's to make (see the MinDB note above), and it
+would be a larger surface than this deployment needs. A NetworkPolicy also depends on the CNI
+enforcing it — k3s does, and it was verified from an unlabelled pod rather than assumed, but a cluster
+whose CNI ignores policies would be silently open.
+
+### D36 — The embedding model is baked to `/opt/models`, not to fastembed's default
+
+**Context:** Downloading bge-small-en-v1.5 at startup makes a cold pod wait on huggingface.co, which
+turns an unrelated outage into a GameRec outage. The image therefore downloads it at build time.
+**Options:** (a) leave it at fastembed's default, `/tmp/fastembed_cache`; (b) set
+`FASTEMBED_CACHE_PATH` to a path outside `/tmp`; (c) ship the model on a volume instead of in the
+image.
+**Choice:** (b), world-readable, with nothing writing there at runtime.
+**Trade-off:** (a) looks identical and fails in deployment only: a hardened pod runs with a read-only
+root filesystem and an `emptyDir` on `/tmp` for onnxruntime, which hides the baked model and sends
+every cold start to huggingface.co — the exact outage the baking was meant to prevent, discoverable
+only by watching a pod's first request. (c) decouples the model from the image, at the price of a
+volume that has to be populated before anything can start and a model version that is no longer
+pinned by the image tag. The cost of (b) is ~130 MB of image and a rebuild to change models, which is
+correct: a model change is a new Model Stamp and a full reindex anyway (D31).
+
+### D37 — One image for the API, the ingest and the reindex
+
+**Context:** Three workloads run the same code: the query service, the nightly ingest, and the reindex.
+**Options:** (a) one image, different commands; (b) an image per workload, each with only what it
+needs.
+**Choice:** (a). The API entrypoint is uvicorn; the Jobs override `command` with `python -m ingest.run`
+or `python -m ingest.reindex`.
+**Trade-off:** (b) would give the API an image without the ingest code and shave a little surface. It
+would also give two images two chances to disagree about the render template or the embedding model,
+and that disagreement is undetectable downstream: a document embedded by one version and queried by
+another returns plausible, wrong neighbours. One image makes the model stamp a property of the
+deployment rather than of whichever pod happens to be running.
