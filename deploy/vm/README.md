@@ -96,6 +96,22 @@ kubectl -n gamerec apply -f deploy/k8s/manual/fill.yaml
 kubectl -n gamerec logs -f job/gamerec-fill
 ```
 
+## Checking that it works
+
+```
+./deploy/vm/smoke.sh https://<your host>
+```
+
+Four things fail independently, so the script checks them separately: `/livez` (the process),
+`/readyz` (MinDB behind it, retried for half a minute because a rollout is downtime measured in
+seconds), `/health` (dimensions, stamp, the kernel MinDB chose, and whether the index is empty) and
+one `/recommend?narrate=false`. It is read-only and safe against production — one embedding, no
+writes. An empty index is a failure rather than a pass: it answers every query with nothing while
+looking perfectly healthy.
+
+Run it after a bootstrap, after a rollout and after a restore. Before TLS exists, point it at a
+`kubectl port-forward` instead of the hostname.
+
 ## TLS
 
 certbot in standalone mode, with a deploy hook that writes the certificate into the Secret the Ingress
