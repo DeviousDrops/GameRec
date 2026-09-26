@@ -15,7 +15,7 @@ lands.
    ┌──────────────────▼─────────────────────────────────┐
    │ k3s, one node                                      │
    │                                                    │
-   │  gamerec-api ×2 ──────► mindb :50051               │
+   │  gamerec-api ─────────► mindb :50051               │
    │       │                   │   └─ backup sidecar ──┐ │
    │       │ /corpus (ro)      │ /data                 │ │
    │       ▼                   ▼                       │ │
@@ -99,16 +99,30 @@ sudo apt-get install -y git
 sudo git clone https://github.com/DeviousDrops/GameRec /root/GameRec
 cd /root/GameRec
 
-kubectl -n gamerec create secret generic gamerec-secrets \
-  --from-literal=GROQ_API_KEY=... \
-  --from-literal=R2_ACCESS_KEY_ID=... \
-  --from-literal=R2_SECRET_ACCESS_KEY=...          # after the first bootstrap creates the namespace
+# the namespace first: the Secret goes in it, and bootstrap.sh will not invent a Secret
+kubectl apply -f deploy/k8s/00-namespace.yaml
+
+read -rsp "Groq API key: " GROQ_KEY; echo
+read -rsp "R2 access key id: " R2_ID; echo
+read -rsp "R2 secret access key: " R2_SECRET; echo
+printf '%s\n' "GROQ_API_KEY=$GROQ_KEY" "R2_ACCESS_KEY_ID=$R2_ID" \
+  "R2_SECRET_ACCESS_KEY=$R2_SECRET" \
+  "R2_ENDPOINT=https://<account>.r2.cloudflarestorage.com" \
+  | kubectl -n gamerec create secret generic gamerec-secrets --from-env-file=/dev/stdin
+unset GROQ_KEY R2_ID R2_SECRET
 
 sudo ./deploy/vm/bootstrap.sh
 ```
 
-`R2_ENDPOINT` goes in `deploy/k8s/10-config.yaml` — it is not a secret, and leaving it empty is a
-supported state that means "no lease and no backups", which the sidecar says loudly by crash-looping.
+Nothing is echoed as you type and history keeps the variable names, not their values. `R2_ENDPOINT`
+is in the Secret rather than the ConfigMap (D48). Leaving it unset anywhere is a supported state
+that means "no lease and no backups", which the sidecar says loudly by crash-looping. Check the four
+keys landed without printing any of them:
+
+```
+kubectl -n gamerec get secret gamerec-secrets \
+  -o go-template='{{range $k,$v := .data}}{{$k}}{{"\t"}}{{len $v}}{{"\n"}}{{end}}'
+```
 
 Then the initial fill, which takes hours at 35 requests a minute (D17) and is resumable, so a
 disconnected ssh session costs nothing:

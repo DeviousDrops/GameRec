@@ -687,3 +687,22 @@ they did buy was ~350 MB of resident ONNX model each, on a host where the sideca
 about what a pod needs produce an OOM kill under exactly the load the numbers were meant to survive.
 The CPU limit matters for a different reason -- a limit of `2` on a 2-vCPU node is no limit at all, so
 a Search could take both cores from the API pod that is waiting on its answer.
+
+### D48 — The R2 endpoint travels in the Secret
+
+**Context:** `R2_ENDPOINT` is not a credential -- it is a URL of the form
+`https://<account-id>.r2.cloudflarestorage.com` -- and `10-config.yaml` said as much while leaving it
+empty for someone to fill in. The repo is public, and `bootstrap.sh` deploys by running
+`kubectl apply -f deploy/k8s/`.
+**Options:** (a) commit the real endpoint to the ConfigMap; (b) patch the ConfigMap on the host after
+cloning; (c) put the key in `gamerec-secrets`, which the apply never touches.
+**Choice:** (c). Every workload lists `secretRef` after `configMapRef` in `envFrom`, so a key present
+in both resolves to the Secret's value, and the empty string in the ConfigMap documents the key
+without carrying a value.
+**Trade-off:** the endpoint is now in a place labelled "secrets", which is mildly dishonest about
+what it is, and reading the effective config means looking at two objects instead of one. Worth it
+for the failure mode (b) has: a hand-patched ConfigMap is silently reset to empty by the next
+deploy, and an empty endpoint means no ingest lease and a crash-looping backup sidecar -- a deploy
+that quietly stops backups is exactly the failure this project spent Phase 4 trying not to have.
+(a) leaks the account id into a public repo for no benefit; it is not a credential, but it is not
+load-bearing information for anyone reading the code either.
