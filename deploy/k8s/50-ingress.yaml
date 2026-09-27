@@ -18,7 +18,8 @@ metadata:
   labels:
     app.kubernetes.io/part-of: gamerec
   annotations:
-    # Redirect plain HTTP rather than serving both. The API is read-only and the corpus is public
+    # This router answers on 443 only. Plain HTTP is handled by the second Ingress below, which
+    # redirects to here rather than serving anything: the API is read-only and the corpus is public
     # Steam data, so this is about not training anyone to ignore the scheme, not about secrecy.
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
 spec:
@@ -32,6 +33,62 @@ spec:
         paths:
           # Everything, including /livez and /readyz. They are not secrets and being able to ask the
           # service whether it thinks it is ready, from outside, is worth more than hiding them.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gamerec-api
+                port:
+                  number: 8000
+---
+# Port 80, which until now had no router at all: `curl http://game-rec.duckdns.org/livez` returned
+# Traefik's own 404 while the annotation above claimed a redirect (D54). Now it is a 308 to https.
+#
+# Two Ingresses and not one with both entrypoints. A single router carrying the redirect on 443 as
+# well would be answering requests that are already https, and whether that is a no-op or a loop
+# depends on how the middleware compares the rewritten URL to the original -- which is not something
+# to find out from the outside, on a host people are using. Separate routers cannot loop: this one
+# only ever sees port 80.
+#
+# The Middleware is a Traefik CRD, so this is the one file in the deploy that names its Ingress
+# controller. k3s ships Traefik and its CRDs, so it adds an object rather than a dependency (D54).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: https-redirect
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/part-of: gamerec
+spec:
+  redirectScheme:
+    scheme: https
+    # 308 rather than 301: it keeps the method and the body, so a redirected request stays the same
+    # request. Nothing here is a POST today, and a permanent redirect that quietly turns one into a GET
+    # is not a thing to leave lying around for whoever adds the first one.
+    permanent: true
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gamerec-http
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/part-of: gamerec
+  annotations:
+    # <namespace>-<name>@kubernetescrd is Traefik's addressing for a Middleware, not a Kubernetes
+    # convention, and it is silently ignored if it does not resolve -- which looks exactly like this
+    # working, except for the 404.
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: gamerec-https-redirect@kubernetescrd
+spec:
+  # No tls block: that is the point of this one.
+  rules:
+    - host: game-rec.duckdns.org
+      http:
+        paths:
+          # A backend is required by the Ingress schema and is never reached -- the middleware answers
+          # every request here before routing. It points at the real Service so that a redirect that
+          # somehow does not fire serves the API rather than a 503.
           - path: /
             pathType: Prefix
             backend:
