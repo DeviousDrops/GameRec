@@ -171,9 +171,20 @@ Without the Secret, Traefik serves its self-signed default — a browser warning
 kubectl -n gamerec exec deploy/mindb -c backup -- python -m ops.restore --list
 ```
 
-Seven generations, the newest within a snapshot interval of now. The failure worth watching for is not
-an error in a log — it is this list quietly stopping at an old timestamp, so it is worth looking at
-after any change to the sidecar or its credentials.
+Up to seven generations. The newest is *not* expected to be recent: a generation is written only when
+the vectors actually changed (D52), so on a service whose last ingest was last night the newest
+generation is from last night, and that is correct rather than stalled.
+
+That makes the check a comparison rather than a glance at a clock:
+
+```
+kubectl -n gamerec logs deploy/mindb -c backup --tail=20   # "no new generation" is the idle state
+kubectl -n gamerec get jobs                                # when did an ingest last add anything?
+```
+
+The failure worth watching for is a successful ingest with no generation newer than it. An error in a
+log is not the signal — the sidecar deliberately survives its own failures (D49) — and neither is an
+old timestamp on its own.
 
 A restore is a deliberate, disruptive operation and reads its own instructions:
 [deploy/k8s/manual/restore.yaml](../k8s/manual/restore.yaml).

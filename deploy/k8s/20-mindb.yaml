@@ -121,9 +121,13 @@ spec:
           image: ghcr.io/deviousdrops/gamerec-api:0.1.0
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "ops.backup"]
-          # 60s matches -snapshot-interval. Watching by mtime means the poll costs one stat() and a
-          # missed tick just means the next one picks the snapshot up.
-          args: ["--snapshot=/data/mindb.snap", "--watch=60"]
+          # 15 minutes, which is the cadence of *generations*, not of noticing. The poll costs one
+          # stat(), and a snapshot whose vectors have not changed is skipped rather than uploaded
+          # (D52) -- so an idle service uploads nothing at all and this number only bounds how often
+          # a busy one can. It was 60s to match -snapshot-interval, back when matching it seemed like
+          # the point: during the initial fill that is ~1440 full snapshots a day off the VM's uplink,
+          # and seven retained generations spanning seven minutes.
+          args: ["--snapshot=/data/mindb.snap", "--watch=900"]
           envFrom:
             - configMapRef:
                 name: gamerec-config

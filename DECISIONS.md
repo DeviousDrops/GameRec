@@ -728,3 +728,36 @@ position: it was always the real alert, and CrashLoopBackOff was never a substit
 second failure wearing a monitoring costume. (c) is the principled fix and stays rejected for the
 reason in 20-mindb.yaml: the snapshot is on a ReadWriteOnce volume, so a separate pod can only reach
 it by landing on the same node, which is true today and not something to depend on.
+
+### D52 — A Backup Generation is written when the vectors change, not when MinDB writes
+
+**Context:** the sidecar watched the snapshot's mtime and treated any change as a reason to upload a
+generation. MinDB writes its snapshot every `-snapshot-interval` whether or not anything was inserted,
+so on the live VM the result was a full generation every 63 seconds, each one pruning a good
+generation to make room for itself. Confirmed from the manifests in R2: `mindb.snap` was
+byte-identical across all seven retained generations — same sha256, 24 bytes — while
+`mindb.snap.meta` differed every time, because MinDB stamps it on every write. Two costs. Seven
+retained generations spanned seven minutes instead of a week of nightlies, which is retention that
+looks like a week on paper and is not. And the volume, which is invisible today only because the
+corpus is empty: at full capacity the snapshot is ~310 MB, so this is ~446 GB a day of uploads off a
+burstable VM's uplink, forever, to preserve nothing that changed.
+
+**Options:** (a) raise `-snapshot-interval` so MinDB rewrites less often; (b) compare the vectors
+rather than the mtime, and skip a snapshot whose bytes have not changed; (c) move backups onto their
+own schedule, decoupled from MinDB entirely.
+
+**Choice:** (b), plus the watch interval from 60s to 15 minutes. mtime stays as the cheap trigger to
+look; the digest of the vectors decides whether to upload. The digest deliberately excludes the
+`.meta`, since including it would compare a timestamp and always report a change. The interval is now
+a ceiling on how often a *busy* service writes generations rather than a match for MinDB's timer:
+during the initial fill the vectors genuinely do change every minute, and minute-granularity backups
+of a derived index are not worth 446 GB a day.
+
+**Trade-off:** up to 15 minutes of vectors can be lost that were previously covered, which is a
+reindex or a partial re-ingest, never lost documents — MinDB is derived and the Game Document Store
+is the source of truth (D13, ADR-0003). The subtler cost is that "the newest generation is recent" is
+no longer a health check: an idle service correctly writes nothing, so the check becomes "a generation
+newer than the last ingest", and `deploy/vm/README.md` had to stop telling anyone to look for a fresh
+timestamp. (a) reduces the waste without removing it and spends MinDB's own crash durability to do it.
+(c) is more machinery for a schedule the snapshot's own mtime already provides, and it cannot live in
+its own pod anyway while the snapshot is on a ReadWriteOnce volume.
