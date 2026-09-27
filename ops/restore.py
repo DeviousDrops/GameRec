@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 from gamerec import objectstore
+from gamerec.checkpoint import Checkpoint
 from gamerec.config import Config
 from gamerec.objectstore import ObjectStore
 from ops.backup import COMPLETE_MARKER, MANIFEST, complete_generations
@@ -60,7 +61,32 @@ def fetch_generation(store: ObjectStore, prefix: str) -> dict[str, bytes]:
                 f"{expected['sha256'][:12]}"
             )
         files[name] = body
+
+    _verify_checkpoint(prefix, files.get("checkpoint.json"))
     return files
+
+
+def _verify_checkpoint(prefix: str, body: bytes | None) -> None:
+    """The checkpoint is about to become the corpus directory's, so it is checked as a Checkpoint.
+
+    Matching the manifest only proves the bytes arrived as they left. Seven generations on the live VM
+    carried `{}` -- valid JSON, uploaded before anything had been ingested, and enough to make the
+    next ingest fail on a KeyError instead of a sentence (D53). The digests all matched.
+    """
+    if body is None:
+        raise RestoreFailed(f"{prefix} has no checkpoint.json; a snapshot alone is not restorable")
+    try:
+        checkpoint = Checkpoint.from_bytes(body)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise RestoreFailed(
+            f"{prefix}checkpoint.json is not a Checkpoint ({type(exc).__name__}: {exc}); restoring "
+            f"it would replace a working checkpoint with one nothing can read"
+        ) from exc
+    if not checkpoint.restorable:
+        raise RestoreFailed(
+            f"{prefix} carries a {checkpoint.status} checkpoint; only COMPLETE may be paired with a "
+            f"snapshot (ADR-0002)"
+        )
 
 
 def write_files(files: dict[str, bytes], snapshot_path: Path, checkpoint_path: Path,

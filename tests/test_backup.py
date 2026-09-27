@@ -144,6 +144,51 @@ def test_a_pending_checkpoint_defers_the_backup(store, tmp_path):
     assert store.objects == {}
 
 
+def test_no_checkpoint_at_all_means_no_generation(store, tmp_path):
+    """A fresh cluster, before the first ingest finishes. There is a snapshot -- MinDB writes one on a
+    timer whether or not anything is in it -- and nothing worth preserving next to it.
+
+    This used to upload b"{}" in the checkpoint's place, which is where D53 came from."""
+    config = Config(corpus_dir=tmp_path)
+    snapshot_path = tmp_path / "mindb.snap"
+    snapshot_path.write_bytes(b"an empty index still has a header")
+
+    assert backup.back_up_once(store, config, snapshot_path) is None
+    assert store.objects == {}
+
+
+def test_a_generation_whose_checkpoint_is_not_a_checkpoint_is_refused(store, tmp_path):
+    """The digest matching only proves the bytes arrived as they left.
+
+    Seven of these were sitting in the bucket on the live VM, every digest correct. Restoring one put
+    `{}` into the corpus directory, and the next ingest died on a KeyError rather than a sentence.
+    """
+    config, snapshot_path = prepare(tmp_path)
+    prefix = backup.write_generation(store, snap(), b"{}")
+
+    with pytest.raises(restore.RestoreFailed, match="not a Checkpoint"):
+        restore.fetch_generation(store, prefix)
+
+
+def test_a_generation_carrying_a_pending_checkpoint_is_refused(store):
+    """Belt and braces: `back_up_once` declines to build one, and a restore declines to use one."""
+    prefix = backup.write_generation(store, snap(), checkpoint_bytes(status=PENDING))
+
+    with pytest.raises(restore.RestoreFailed, match="only COMPLETE"):
+        restore.fetch_generation(store, prefix)
+
+
+def test_a_generation_with_no_checkpoint_file_is_refused(store):
+    prefix = "gen-20260101T000000Z/"
+    store.put(prefix + "mindb.snap", b"vectors")
+    store.put(prefix + MANIFEST, json.dumps(
+        {"files": {"mindb.snap": {"bytes": 7, "sha256": backup._digest(b"vectors")}}}).encode())
+    store.put(prefix + COMPLETE_MARKER, b"")
+
+    with pytest.raises(restore.RestoreFailed, match="no checkpoint.json"):
+        restore.fetch_generation(store, prefix)
+
+
 def test_a_complete_checkpoint_is_backed_up_with_the_snapshot(store, tmp_path):
     config, snapshot_path = prepare(tmp_path, data=b"384 dims worth")
 

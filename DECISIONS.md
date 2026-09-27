@@ -761,3 +761,31 @@ newer than the last ingest", and `deploy/vm/README.md` had to stop telling anyon
 timestamp. (a) reduces the waste without removing it and spends MinDB's own crash durability to do it.
 (c) is more machinery for a schedule the snapshot's own mtime already provides, and it cannot live in
 its own pod anyway while the snapshot is on a ReadWriteOnce volume.
+
+### D53 — A Backup Generation always carries a real Checkpoint
+
+**Context:** found while verifying the restore on the VM, before running it. `back_up_once` used
+`b"{}"` as the checkpoint when there was none on disk, on the reasoning that a snapshot is worth
+keeping either way. Seven such generations were in the bucket, every digest correct, all of them
+restorable — and restoring one writes `{}` into the corpus directory, where `Checkpoint.load` raises
+`KeyError: 'model_stamp'`. The next ingest would not report a bad restore; it would crash. This is the
+failure ADR-0002 is about, arriving by a route ADR-0002 did not cover: the invariant
+`checkpoint <= snapshot` was enforced for a checkpoint that claims too much, and not for one that
+cannot be read at all. `fetch_generation` verified sha256 for every file, which proves the bytes
+arrived as they left and says nothing about whether they were ever a Checkpoint.
+
+**Options:** (a) make `Checkpoint.load` tolerate a malformed file and return None; (b) stop writing a
+generation when there is no checkpoint, and have a restore verify the checkpoint it is about to
+install; (c) leave it and document that a generation from before the first ingest must not be
+restored.
+
+**Choice:** (b), at both ends. No checkpoint means nothing has finished ingesting, so there is nothing
+a generation would preserve — an empty index is rebuilt by starting the ingest, not by a restore.
+And `fetch_generation` now parses the checkpoint through `Checkpoint.from_bytes` and refuses anything
+that is not COMPLETE, which also covers the generations already in the bucket.
+
+**Trade-off:** a restore now has one more way to refuse, and refusals are load-bearing at exactly the
+moment someone is under pressure — so both messages say which generation and what was wrong with it,
+rather than "invalid checkpoint". (a) is tempting and wrong: a corpus directory whose checkpoint
+silently reads as "no ingest has happened" is how a fill quietly restarts from zero, and the whole
+point of the file is to be trusted. (c) puts a sharp edge in a runbook and waits.

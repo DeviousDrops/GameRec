@@ -155,12 +155,20 @@ def back_up_once(store: ObjectStore, config: Config, snapshot_path: Path) -> str
     """One generation, or None when the state on disk is not worth backing up yet."""
     # Checkpoint first: see the module docstring. This ordering is the invariant.
     checkpoint = Checkpoint.load(config.checkpoint_path)
-    if checkpoint is not None and checkpoint.status != COMPLETE:
+    if checkpoint is None:
+        # Nothing has ever finished ingesting, so there is nothing here worth a generation. This used
+        # to upload b"{}" as the checkpoint, which parses as JSON and is not a Checkpoint: restoring
+        # it put that file back into the corpus directory, where the next ingest died on a KeyError
+        # rather than saying what was wrong (D53).
+        log.info("no checkpoint at %s; nothing has been ingested to back up",
+                 config.checkpoint_path)
+        return None
+    if checkpoint.status != COMPLETE:
         # An ingest is mid-flight. Its checkpoint is deliberately unrestorable, so a generation built
         # around it would be a generation nothing may use.
         log.info("checkpoint is %s; waiting for the run to finish", checkpoint.status)
         return None
-    checkpoint_bytes = config.checkpoint_path.read_bytes() if checkpoint is not None else b"{}"
+    checkpoint_bytes = config.checkpoint_path.read_bytes()
 
     snapshot = read_snapshot(snapshot_path)
     if snapshot is None:

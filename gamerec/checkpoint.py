@@ -47,9 +47,19 @@ class Checkpoint:
     def load(cls, path: Path) -> "Checkpoint | None":
         """None means no checkpoint, which is a first run rather than an error."""
         try:
-            raw = json.loads(Path(path).read_text(encoding="utf-8"))
+            body = Path(path).read_bytes()
         except FileNotFoundError:
             return None
+        return cls.from_bytes(body)
+
+    @classmethod
+    def from_bytes(cls, body: bytes) -> "Checkpoint":
+        """Parse without a file, which is what a restore has: bytes out of a Backup Generation.
+
+        Raises on anything that is not a Checkpoint. A caller holding bytes from somewhere else needs
+        to be able to find that out and refuse, rather than discover it one ingest later (D53).
+        """
+        raw = json.loads(body)
         return cls(
             model_stamp=raw["model_stamp"],
             template_version=int(raw["template_version"]),
