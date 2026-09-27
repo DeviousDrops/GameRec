@@ -268,6 +268,77 @@ def test_a_failing_backup_does_not_end_the_sidecar(monkeypatch, tmp_path):
     assert len(attempts) == 3
 
 
+def test_a_rewrite_with_the_same_vectors_makes_no_new_generation(monkeypatch, tmp_path):
+    """MinDB writes its snapshot on a timer, not on a change. Seen on the VM: seven generations a
+    minute apart, every one of them the same 24 bytes of vectors and a freshly stamped .meta, each
+    pruning a good generation to make room for itself (D52)."""
+    config, snapshot = prepare(tmp_path)
+    store = MemoryStore()
+    rewrites = []
+
+    def sleeping(_seconds):
+        # What MinDB does every -snapshot-interval: same vectors, new sidecar, new mtime.
+        rewrites.append(1)
+        snapshot.write_bytes(b"vectors")
+        snapshot.with_name(snapshot.name + ".meta").write_bytes(b"stamped at tick %d" % len(rewrites))
+        os.utime(snapshot, ns=(len(rewrites) * 10**9, len(rewrites) * 10**9))
+        if len(rewrites) == 4:
+            raise _Stop
+
+    monkeypatch.setattr(backup, "Config", lambda: config)
+    monkeypatch.setattr(backup.objectstore, "from_config", lambda _config: store)
+    monkeypatch.setattr(backup.time, "sleep", sleeping)
+    monkeypatch.setattr("sys.argv", ["backup", f"--snapshot={snapshot}", "--watch=1"])
+
+    with pytest.raises(_Stop):
+        backup.main()
+
+    assert len(backup.complete_generations(store)) == 1
+
+
+def test_changed_vectors_do_make_a_new_generation(monkeypatch, tmp_path):
+    """The other half: dedup must not turn into never backing up again."""
+    config, snapshot = prepare(tmp_path)
+    store = MemoryStore()
+    ticks = []
+
+    def sleeping(_seconds):
+        ticks.append(1)
+        snapshot.write_bytes(b"vectors and %d more" % len(ticks))
+        os.utime(snapshot, ns=(len(ticks) * 10**9, len(ticks) * 10**9))
+        if len(ticks) == 3:
+            raise _Stop
+
+    # Generation names have one-second resolution, so a clock that moves is part of the setup rather
+    # than a detail of it: three uploads inside one second are three writes to one prefix.
+    monkeypatch.setattr(backup.time, "time", lambda: 1_600_000_000 + 60 * len(ticks))
+    monkeypatch.setattr(backup, "Config", lambda: config)
+    monkeypatch.setattr(backup.objectstore, "from_config", lambda _config: store)
+    monkeypatch.setattr(backup.time, "sleep", sleeping)
+    monkeypatch.setattr("sys.argv", ["backup", f"--snapshot={snapshot}", "--watch=1"])
+
+    with pytest.raises(_Stop):
+        backup.main()
+
+    # The first snapshot plus the two rewrites that changed it; the third lands on the next tick.
+    assert len(backup.complete_generations(store)) == 3
+
+
+def test_the_digest_ignores_the_sidecar_file(tmp_path):
+    """Keyed on the vectors, because the .meta carries a timestamp and always differs."""
+    snapshot = tmp_path / "mindb.snap"
+    meta = tmp_path / "mindb.snap.meta"
+    snapshot.write_bytes(b"vectors")
+    meta.write_bytes(b"stamped once")
+    first = backup.snapshot_digest(snapshot)
+
+    meta.write_bytes(b"stamped again, differently")
+    assert backup.snapshot_digest(snapshot) == first
+
+    snapshot.write_bytes(b"different vectors")
+    assert backup.snapshot_digest(snapshot) != first
+
+
 def test_an_unconfigured_sidecar_complains_instead_of_exiting(monkeypatch, tmp_path):
     ticks = []
 
