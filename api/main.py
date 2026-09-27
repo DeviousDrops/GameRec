@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 import grpc
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
 
 from api.narrate import narrate
 from gamerec.config import Config
@@ -191,3 +193,14 @@ def recommend(
             request_text, results, config.groq_api_key, config.groq_model
         )
     return response
+
+
+# The frontend, out of this same image and behind this same Ingress (D50). Two things about where this
+# sits: a Mount at "/" matches every path, so it has to be registered after the routes above or it
+# would shadow all of them; and it is conditional because the image that runs the ingest is this image,
+# and a checkout or a container without web/ should still serve the API rather than fail to import.
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+if WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+else:
+    log.warning("no web/ at %s; serving the API without a frontend", WEB_DIR)

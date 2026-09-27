@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY gamerec/ gamerec/
 COPY api/ api/
+# The frontend the API serves at / (D50). Static files, so no build stage and no node here.
+COPY web/ web/
 COPY ingest/ ingest/
 # The backup and restore entrypoints. Same image again: they have to agree with the ingest about
 # where the checkpoint lives and what a complete one means (D37).
