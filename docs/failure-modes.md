@@ -147,6 +147,38 @@ Stopping at a boundary is why this is cheap: a batch ends with durable state, so
 costs nothing that is not already on disk. A second holder failing to acquire the lease exits
 **0**, not 1 -- the lease working as intended should not page anyone.
 
+## The ingest is OOM-killed
+
+*Exercised, unintentionally: the first nightly run on the VM, 03:22 UTC on 2026-09-27 (D51).*
+
+```
+symptom     the CronJob reports Completed and the corpus is empty:
+            /health gives corpus_size 0 next to name_index_size 200
+behaviour   the retry acquires nothing -- it finds the lease held by its own dead
+            predecessor, logs that, and exits 0
+recovery    none until the next run, which resumes and re-fetches only what is missing
+```
+
+This is the most misleading failure in this document, because every layer reports success. The Job
+succeeded, the pod says `Completed`, exit code 0, and the surviving log says the lease is held --
+which is the lease working. The kill happened in the attempt before, whose container status is
+garbage-collected within hours, so `kubectl logs --previous` answers `not found` and nothing in
+Kubernetes remembers why. The verdict only survives in the kernel log:
+
+```
+sudo dmesg -T | grep -i oom-kill      # names the cgroup, the pid and the RSS at death
+```
+
+Re-running is safe and cheap. The OOM landed between the corpus append and the checkpoint write, so
+there was no checkpoint at all -- and resumption does not need one: `checkpoint.appids |=
+store.appids()` unions in whatever the corpus already holds, so the documents written before the kill
+are not fetched again. That is the ordering in D13 paying off in the direction it was designed for:
+the corpus can run ahead of the vectors, never behind them.
+
+Two things make this cheap rather than serious, and both are worth keeping: a run holds the lease for
+a TTL rather than until it exits, so a dead holder blocks at most one retry window; and the fix
+belongs in whatever grew past the limit, not in the limit. See D51.
+
 ## The final snapshot fails
 
 *Reasoned, not exercised. The path is `log.error("snapshot failed; checkpoint left pending")`.*
