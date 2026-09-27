@@ -728,3 +728,36 @@ position: it was always the real alert, and CrashLoopBackOff was never a substit
 second failure wearing a monitoring costume. (c) is the principled fix and stays rejected for the
 reason in 20-mindb.yaml: the snapshot is on a ReadWriteOnce volume, so a separate pod can only reach
 it by landing on the same node, which is true today and not something to depend on.
+
+### D51 — The model's batch size is set in the embedder, not by its callers
+
+**Context:** the first nightly ingest on the real VM was OOM-killed. It fetched 199 games, wrote them
+to the corpus and merged 200 entries into the name index, then died embedding that batch, before its
+first insert — which is why `/health` reported `corpus_size: 0` alongside `name_index_size: 200`, and
+why the retry found the ingest lease held by its own dead predecessor and correctly declined to run.
+Nothing in the pod's status said "OOM": the first attempt's state had already been garbage-collected,
+and only `dmesg` still held the verdict. `fastembed.TextEmbedding.embed()` defaults to
+`batch_size=256` and pads every text in a run to the longest one in that run, so the cost is
+batch × longest sequence. Measured on the VM against 200 real rendered documents, model already
+resident at ~290Mi:
+
+| onnx batch | peak | throughput |
+|---|---|---|
+| 16 | 364Mi | 14.1 docs/s |
+| 32 | 376Mi | 13.2 docs/s |
+| 64 | 487Mi | 12.3 docs/s |
+| 256 (default) | 1202Mi | 11.3 docs/s |
+
+**Options:** (a) raise the ingest's memory limit to ~1.5Gi; (b) shrink `ingest.run.BATCH_SIZE` from
+200 until it fits; (c) cap the batch handed to ONNX inside `Embedder`, leaving callers' batch sizes
+alone.
+**Choice:** (c), at 32. `embed_documents` chunks internally, so peak memory is a property of the
+embedder rather than of whoever calls it. The ingest's 200 stays what it always was: the unit of
+durable progress between a corpus append and a checkpoint.
+**Trade-off:** there is no accuracy cost — the vectors are bit-identical across every batch size
+measured, so this is genuinely free — and no throughput cost either, since the padding avoided was
+work as well as memory. What it does cost is a place where a number matters invisibly: 32 is measured
+on a 2 vCPU host and nothing enforces it against a machine with room for more. (a) buys nothing on a
+4 GiB host already running MinDB, a backup sidecar and the API, and would have to be bought again at
+the next model. (b) conflates two unrelated concerns, which is the bug this fixes: it would make the
+durability granularity of the corpus a function of how much RAM the embedder wants.
