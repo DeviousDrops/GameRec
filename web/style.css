@@ -1,0 +1,204 @@
+/* Dark by default, light when the system asks for it. Only the custom properties change between the
+   two -- every rule below the :root blocks is written once. */
+
+:root {
+  color-scheme: dark;
+  --bg: #0e1116;
+  --panel: #161b22;
+  --panel-edge: #262d38;
+  --ink: #e6edf3;
+  --ink-dim: #9aa6b2;
+  --ink-faint: #6b7684;
+  --accent: #58a6ff;
+  --accent-ink: #04111f;
+  --good: #3fb950;
+  --warn: #d29922;
+  --bad: #f85149;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f6f8fa;
+    --panel: #ffffff;
+    --panel-edge: #d8dee4;
+    --ink: #1f2328;
+    --ink-dim: #59636e;
+    --ink-faint: #818b98;
+    --accent: #0969da;
+    --accent-ink: #ffffff;
+    --good: #1a7f37;
+    --warn: #9a6700;
+    --bad: #cf222e;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+  max-width: 54rem;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: var(--accent); }
+
+.masthead h1 {
+  margin: 0;
+  font-size: 1.9rem;
+  letter-spacing: -0.02em;
+}
+
+.tagline { margin: 0.35rem 0 0; color: var(--ink-dim); }
+
+.corpus {
+  margin: 0.75rem 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-faint);
+}
+
+/* An empty corpus is a failure that looks like a success, so it gets the loud colour rather than the
+   quiet one every other line of status text uses. */
+.corpus[data-state="empty"] { color: var(--warn); font-weight: 600; }
+.corpus[data-state="down"] { color: var(--bad); }
+
+form {
+  margin: 1.75rem 0 0;
+  padding: 1.25rem;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+}
+
+.field { display: flex; flex-direction: column; gap: 0.35rem; flex: 1; }
+.field.narrow { flex: 0 0 5.5rem; }
+
+.row { display: flex; gap: 1rem; margin-top: 1rem; align-items: flex-end; }
+
+label { font-size: 0.85rem; font-weight: 600; }
+
+.hint { font-weight: 400; color: var(--ink-faint); }
+
+textarea, input[type="text"], select {
+  padding: 0.55rem 0.65rem;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  font: inherit;
+  resize: vertical;
+}
+
+textarea::placeholder, input::placeholder { color: var(--ink-faint); }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.1rem;
+  flex-wrap: wrap;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 400;
+  font-size: 0.9rem;
+}
+
+button {
+  padding: 0.55rem 1.3rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover { filter: brightness(1.1); }
+button[disabled] { opacity: 0.55; cursor: progress; }
+
+.status { margin: 1.25rem 0 0; color: var(--ink-dim); }
+.status[data-state="error"] { color: var(--bad); }
+
+.narration {
+  margin: 1.5rem 0 0;
+  padding: 1rem 1.1rem;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--ink-dim);
+}
+
+.results { margin-top: 1.5rem; display: flex; flex-direction: column; gap: 0.85rem; }
+
+.card {
+  padding: 1rem 1.1rem;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+}
+
+.card h2 { margin: 0; font-size: 1.05rem; }
+.card h2 a { text-decoration: none; }
+.card h2 a:hover { text-decoration: underline; }
+
+.card p { margin: 0.5rem 0 0; color: var(--ink-dim); font-size: 0.93rem; }
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.7rem;
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+}
+
+/* The score is a cosine similarity, so it is only meaningful next to the other scores in the same
+   response. A bar reads as "compared with these", where a bare 0.7241 invites being read as a
+   percentage of something. */
+.bar {
+  flex: 0 0 4.5rem;
+  height: 4px;
+  background: var(--panel-edge);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.bar > span { display: block; height: 100%; background: var(--good); }
+
+.genres { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+.genre {
+  padding: 0.05rem 0.45rem;
+  background: var(--bg);
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+}
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--panel-edge);
+  font-size: 0.82rem;
+  color: var(--ink-faint);
+}
+
+@media (max-width: 34rem) {
+  .row { flex-direction: column; align-items: stretch; }
+  .field.narrow { flex: 1; }
+}

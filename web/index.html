@@ -1,0 +1,74 @@
+<!doctype html>
+<!-- Served by the API itself, out of the same image and behind the same Ingress (D50). No build step
+     and no bundler: this is one page of vanilla HTML, CSS and JS, which is why there is no toolchain
+     here to keep working. Nothing is fetched from a CDN either -- a third party being down should not
+     be able to take the page down with it. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GameRec</title>
+<meta name="description" content="Steam game recommendations by mood, by a game you already like, or both.">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+
+<header class="masthead">
+  <h1>GameRec</h1>
+  <p class="tagline">Describe a mood, name a game you already like, or both.</p>
+  <!-- The corpus size comes from /health on load. An empty corpus answers every query with nothing
+       while looking perfectly healthy, so it is stated on the page rather than left to be inferred
+       from an empty result list. -->
+  <p class="corpus" id="corpus" data-state="loading">checking the corpus…</p>
+</header>
+
+<main>
+  <form id="query" autocomplete="off">
+    <div class="field">
+      <label for="q">Mood</label>
+      <textarea id="q" name="q" rows="2" placeholder="something slow and melancholy to unwind with"></textarea>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label for="seed">Seed game <span class="hint">optional — a name or a Steam appid</span></label>
+        <input id="seed" name="seed" type="text" placeholder="Hollow Knight">
+      </div>
+
+      <div class="field narrow">
+        <label for="k">Results</label>
+        <select id="k" name="k">
+          <option value="5" selected>5</option>
+          <option value="10">10</option>
+          <option value="20">20</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="actions">
+      <label class="check">
+        <input id="narrate" type="checkbox" checked>
+        Explain the picks <span class="hint">costs a few seconds</span>
+      </label>
+      <button type="submit" id="submit">Recommend</button>
+    </div>
+  </form>
+
+  <!-- aria-live so that a screen reader hears the 503-and-retry cycle, which is the one state the
+       page enters without the user doing anything. -->
+  <p class="status" id="status" role="status" aria-live="polite" hidden></p>
+
+  <section id="narration" class="narration" hidden></section>
+  <section id="results" class="results" aria-label="Recommendations"></section>
+</main>
+
+<footer>
+  <a href="https://github.com/DeviousDrops/GameRec">source</a> ·
+  <a href="/health">/health</a> ·
+  data from Steam, vectors in <a href="https://github.com/DeviousDrops/mindb">MinDB</a>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
