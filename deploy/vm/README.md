@@ -178,11 +178,28 @@ after any change to the sidecar or its credentials.
 A restore is a deliberate, disruptive operation and reads its own instructions:
 [deploy/k8s/manual/restore.yaml](../k8s/manual/restore.yaml).
 
-## What has not been done on a real VM
+## What has and has not been done on the real VM
 
-Everything above is written from the k3d verification in [../k8s/README.md](../k8s/README.md) plus the
-documented behaviour of k3s, certbot and Azure. The manifests, the backup sidecar's code path and the
-restore have all been run; **this script has not yet been run end to end on the Azure VM**, so the
-host-specific steps — the NSG rules, DuckDNS, certbot against a real name — are the parts most likely
-to need a correction on first contact. The script is idempotent so that correcting it is cheap: fix,
-`git pull`, run it again.
+Run on the Azure host on 26 September 2026, and corrected where it was wrong rather than left as
+written. Done, first-hand:
+
+- `bootstrap.sh` end to end on a fresh Ubuntu 24.04 VM: swap off, k3s pinned and installed, manifests
+  applied, both rollouts green.
+- The images pull and run on x86_64. `/health` reports the `avx2` kernel with `fast_int8`, which is
+  the number benchmarks get labelled with.
+- The backup sidecar taking a real backup with real R2 credentials. It wrote a generation with its
+  COMPLETE marker and sha256 manifest, and `ops.restore --list` read it back.
+- One outage, unplanned and worth more than the rest: a wrong bucket name crash-looped the sidecar,
+  which dropped MinDB out of its Service and took the API down with it. D49 and
+  [../../docs/failure-modes.md](../../docs/failure-modes.md) carry the result.
+
+Not done yet, and not to be read as working:
+
+- **TLS.** certbot's staging dry run passes against the DuckDNS name; no certificate has been issued,
+  so the Ingress is still serving Traefik's self-signed default.
+- **A restore in-cluster.** The generation in R2 has been listed, not restored. That is still only
+  k3d-tested, and it is cheap to exercise while the corpus is empty.
+- **The initial fill**, and therefore anything about behaviour at 176k games rather than 200.
+- **A deliberate reboot.**
+
+The script is idempotent so that correcting it stays cheap: fix, `git pull`, run it again.

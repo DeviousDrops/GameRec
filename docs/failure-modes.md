@@ -192,7 +192,7 @@ single-node cluster on local-path storage, so "the disk" is the whole VM's disk.
 
 ## The node reboots
 
-*Not exercised: the real VM does not exist yet.*
+*Not exercised. The VM exists and runs the service; nobody has rebooted it on purpose yet.*
 
 ```
 symptom     everything is down for as long as the VM takes to come back
