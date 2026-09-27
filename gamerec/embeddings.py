@@ -19,6 +19,24 @@ QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 # Written into every payload. An ingest run refuses to touch a corpus stamped differently (D3).
 MODEL_STAMP = f"{MODEL_NAME}/{DIMS}"
 
+# How many documents go into one ONNX run, regardless of how many the caller hands over.
+#
+# fastembed's default is 256, and it pads every text in a run to the longest one in that run, so the
+# cost is batch x longest sequence rather than the sum of the actual lengths. Measured on the VM
+# (2 vCPU, 4 GiB) against 200 real rendered documents, with the model already resident at ~290Mi:
+#
+#     onnx batch     peak       throughput
+#     16             364Mi      14.1 docs/s
+#     32             376Mi      13.2 docs/s
+#     64             487Mi      12.3 docs/s
+#     256 (default) 1202Mi      11.3 docs/s
+#
+# The default is how the first nightly ingest died: 1179Mi against a 1Gi limit, OOM-killed while
+# embedding its first batch, having already written the documents and the name index (D51). Capping
+# it is not a trade -- the padding it avoids makes it faster too, and the vectors are bit-identical
+# across every batch size above, so nothing about the corpus depends on this number.
+ONNX_BATCH = 32
+
 
 class Embedder:
     def __init__(self, model_name: str = MODEL_NAME) -> None:
@@ -26,7 +44,13 @@ class Embedder:
         self.model_stamp = f"{model_name}/{DIMS}"
 
     def embed_documents(self, texts: list[str]) -> list[np.ndarray]:
-        return [v.astype(np.float32) for v in self._model.embed(texts)]
+        """Chunked at ONNX_BATCH, so peak memory is set here rather than by the size of `texts`.
+
+        Callers batch for their own reasons -- the ingest's batch is the unit of durable progress,
+        ~200 documents between a corpus append and a checkpoint -- and that unit should not double as
+        a memory budget for the model.
+        """
+        return [v.astype(np.float32) for v in self._model.embed(texts, batch_size=ONNX_BATCH)]
 
     def embed_query(self, text: str) -> np.ndarray:
         return self.embed_documents([QUERY_PREFIX + text])[0]
