@@ -180,8 +180,8 @@ A restore is a deliberate, disruptive operation and reads its own instructions:
 
 ## What has and has not been done on the real VM
 
-Run on the Azure host on 26 September 2026, and corrected where it was wrong rather than left as
-written. Done, first-hand:
+Run on the Azure host on 26 and 27 September 2026, and corrected where it was wrong rather than left
+as written. Done, first-hand:
 
 - `bootstrap.sh` end to end on a fresh Ubuntu 24.04 VM: swap off, k3s pinned and installed, manifests
   applied, both rollouts green.
@@ -192,14 +192,26 @@ written. Done, first-hand:
 - One outage, unplanned and worth more than the rest: a wrong bucket name crash-looped the sidecar,
   which dropped MinDB out of its Service and took the API down with it. D49 and
   [../../docs/failure-modes.md](../../docs/failure-modes.md) carry the result.
+- **TLS, issued and serving.** `https://game-rec.duckdns.org/livez` answers 200 behind a Let's Encrypt
+  certificate valid to 26 December 2026. The procedure in the TLS section above is what worked, on the
+  second attempt; the two things that cost the first one are written into it.
+- Stopping and restarting k3s under a live service. Traefik, the API and MinDB all came back without
+  help; the API's restart count went up by one and nothing else noticed.
+- The download half of a restore, against real R2, pointed at a scratch directory rather than the
+  corpus: listing generations, verifying the sha256 of every file in the manifest, writing them
+  snapshot-last. It also turned up D53 — a generation built before any ingest finished carried `{}`
+  where its checkpoint should be, and restoring it reported success.
 
 Not done yet, and not to be read as working:
 
-- **TLS.** certbot's staging dry run passes against the DuckDNS name; no certificate has been issued,
-  so the Ingress is still serving Traefik's self-signed default.
-- **A restore in-cluster.** The generation in R2 has been listed, not restored. That is still only
-  k3d-tested, and it is cheap to exercise while the corpus is empty.
+- **A restore in-cluster**, meaning MinDB booting from a snapshot it did not write. The download half
+  is exercised (above); nothing has yet been restored over `/data` and started. Worth doing with
+  vectors in it rather than while the corpus is empty, since an empty index restores to an empty index
+  and proves little.
+- **The nightly ingest completing.** It has run once, and was OOM-killed embedding its first batch
+  (D51). The corpus on the VM is 199 documents and no vectors.
 - **The initial fill**, and therefore anything about behaviour at 176k games rather than 200.
+- **The plain-HTTP redirect** (D54), which is a manifest away and has only been dry-run.
 - **A deliberate reboot.**
 
 The script is idempotent so that correcting it stays cheap: fix, `git pull`, run it again.
