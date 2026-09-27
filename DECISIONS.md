@@ -728,3 +728,23 @@ position: it was always the real alert, and CrashLoopBackOff was never a substit
 second failure wearing a monitoring costume. (c) is the principled fix and stays rejected for the
 reason in 20-mindb.yaml: the snapshot is on a ReadWriteOnce volume, so a separate pod can only reach
 it by landing on the same node, which is true today and not something to depend on.
+
+### D50 — The frontend is static files served by the API
+
+**Context:** the service answered only JSON, so using it meant curl or /docs. It needed a page. The
+host is a 2 vCPU / 4 GiB burstable VM already running MinDB, the API, an embedding model in memory
+and a nightly ingest, and the API container is limited to 900Mi (D47).
+**Options:** (a) a second Deployment serving the page -- nginx, or a Node app; (b) a build step in
+this repo producing a bundle the API serves; (c) plain HTML, CSS and JS in web/, copied into the
+existing image and mounted at "/" by the API.
+**Choice:** (c). The page needs a form, a fetch and a list; that is not a framework's worth of
+problem. It ships in the image that already exists, behind the Ingress that already exists, from the
+origin the API already serves, so there is no second rollout, no CORS, no extra memory, and nothing
+to keep up to date but the browser.
+**Trade-off:** no components, no types and no bundler, so the page stays small by discipline rather
+than by tooling -- if it grows past a few hundred lines this decision should be revisited rather than
+worked around. Mounting at "/" also puts a route that matches everything in front of the API's own
+routes, which is safe only because the mount is registered last; tests/test_web.py exists to catch a
+reordering, because the symptom would be every probe 404ing and Kubernetes pulling the pod out of its
+Service. (a) spends a container and a rollout on serving three files. (b) adds a toolchain, and a
+Node build stage in a Python image is a second supply chain for a page with no dependencies.
