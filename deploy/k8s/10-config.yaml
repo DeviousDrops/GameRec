@@ -15,6 +15,12 @@ data:
   REVIEW_FLOOR: "50"
   GROQ_MODEL: "llama-3.3-70b-versatile"
 
+  # Whether /health names the stack -- kernel, architecture, capacity, model -- on top of saying
+  # whether it works. Off, because this API answers the open internet and that block is a free
+  # fingerprint; an operator reads the same thing from inside the cluster. Flip it to "true" and
+  # roll the API before running bench.latency, which refuses to label a run without it (D56).
+  HEALTH_DETAIL: "false"
+
   # Ingest pacing (D17). Deliberately under Steam's measured ceiling: the penalty for guessing high
   # is a 429 and a 20-30s backoff, which makes the whole run slower than pacing correctly would.
   STEAM_REQUESTS_PER_MIN: "35"

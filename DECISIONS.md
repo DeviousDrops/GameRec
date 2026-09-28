@@ -869,3 +869,30 @@ redirect is the only thing missing. It is also a CRD, which AGENTS.md asks be ju
 Traefik and its CRDs, so this adds an object and not a dependency, and no operator is installed.
 (c) redirects for everything on the node through Helm values, which is both broader than this service
 and the Helm layer this project stays out of. (a) is honest and leaves a hostname that 404s.
+
+### D56 — /health says whether it works; what it is built from is behind a flag
+
+**Context:** the API is reachable from the internet at a hostname a person types, and `/health` was
+answering everybody with `capacity`, `model_stamp`, `template_version` and MinDB's `kernel`, `goarch`
+and `fast_int8`. That is a free fingerprint — exact model, exact index capacity, the CPU feature the
+vector store compiled against — handed to anyone who asks, for the benefit of an operator who can
+already read all of it from inside the cluster. It is not a secret: this repo is public and every one
+of those values is in it. It is that an unauthenticated endpoint is a bad place to keep a manifest.
+
+**Options:** (a) leave it; the repo is public anyway. (b) drop the detail entirely. (c) split it:
+liveness-grade facts always, stack detail only when `HEALTH_DETAIL` is set. (d) require a token on
+`/health`.
+
+**Choice:** (c), defaulting off. `status`, `corpus_size`, `dims`, `name_index_size` and `wal_healthy`
+stay unconditional, because those five are what `smoke.sh` fails a deploy on — an empty index, a
+dimension mismatch, a broken WAL — and a smoke test that cannot check those is not a smoke test. The
+rest merges in only behind the flag.
+
+**Trade-off:** `bench.latency` labels every run with the kernel it read from `/health` (D23,
+ADR-0006), and against the default it now has nothing to read. It refuses to run rather than printing
+`kernel=None`, which means benchmarking the live service takes a config change and a rollout. That is
+the right friction: an unlabelled latency number is the easiest dishonest thing in this project, and
+ADR-0006 exists because of it. (b) would have cost the same without leaving a way back. (d) adds the
+first credential in a service whose access control is deliberately reachability (D8), to protect data
+that is on GitHub. (a) is defensible and still wrong: `corpus_size` is the only field on that endpoint
+a stranger has any use for.
