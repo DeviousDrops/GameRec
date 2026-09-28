@@ -869,3 +869,34 @@ redirect is the only thing missing. It is also a CRD, which AGENTS.md asks be ju
 Traefik and its CRDs, so this adds an object and not a dependency, and no operator is installed.
 (c) redirects for everything on the node through Helm values, which is both broader than this service
 and the Helm layer this project stays out of. (a) is honest and leaves a hostname that 404s.
+
+### D55 — A lease in our own name is a dead predecessor, not a competitor
+
+**Context:** the nightly ingest of 2026-09-28 was OOM-killed mid-embed, restarted in place under
+`restartPolicy: OnFailure`, read the lease its own dead attempt had written 24 minutes earlier, and
+exited 0 because a held lease means stand down (D17). The Job then reported `Complete` with
+`succeeded=1`. A run that died with 1043588kB anon-rss in the kernel log was indistinguishable, to
+everything in Kubernetes, from a run that worked — and the `backoffLimit` was spent on the no-op that
+made it look that way. `docs/failure-modes.md` had already called this the most misleading failure in
+the document; it was written up before it had a fix.
+
+**Options:** (a) leave it and rely on the "corpus is stale" alert to notice eventually; (b) exit
+non-zero on a held lease so the Job at least fails; (c) treat an unexpired lease whose owner string
+equals our own as takeable; (d) shorten the TTL so the retry outlives the lease.
+
+**Choice:** (c). `default_owner()` is pod name plus pid, and a Job pod's pid is always 1, so a
+container restarted in place is byte-identical in the lease to the attempt that died. Reading our own
+unexpired lease can only mean the process that wrote it is gone, because we are that identity and we
+are not holding it. Two pods cannot share a name, so this cannot fire against a live competitor —
+`test_a_different_pod_still_gets_the_door_closed_on_it` pins that. The token still governs release, so
+the dead attempt cannot delete the lease its successor now holds even though both are called the same
+thing.
+
+**Trade-off:** identity now carries meaning it did not before. `owner` was a string for a human
+reading the lease at 3am, and it is now load-bearing: anything that makes two live processes share it
+— running two ingests in one pod, or setting `HOSTNAME` by hand — turns the guard into a way to
+double-ingest. That is a real edge and the mitigation is that it is narrow and tested rather than
+that it is impossible. (b) makes the failure visible without making it recoverable, and it also makes
+a correctly declined manual run look like a bug, which is the reason D17 chose exit 0 in the first
+place. (d) trades a whole class of protection for this one case: a short TTL means a slow batch can
+lose its lease to a competitor mid-run. (a) is what happened twice.

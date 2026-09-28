@@ -122,3 +122,45 @@ def test_a_conflicting_conditional_write_is_not_an_error():
     store._client = Client(500)
     with pytest.raises(ClientError):
         store.put_if_absent("k", b"v")
+
+
+def test_a_pod_takes_over_the_lease_its_own_previous_attempt_left_behind():
+    """The failure this closes: an OOM-killed run whose restart reported success.
+
+    `owner` is pod name plus pid, and a Job pod's pid is always 1, so a container restarted in place
+    is byte-identical in the lease to the attempt that died. Reading our own unexpired lease can only
+    mean the process that wrote it is gone, because we are that identity and we are not holding it.
+    """
+    store = MemoryStore()
+    me = "gamerec-ingest-29842757-vr9wx/1"
+    first = acquire(store, owner=me, ttl=1800, now=1000.0)
+
+    # 24 minutes later, well inside the 30-minute TTL: the restarted container asks again.
+    second = acquire(store, owner=me, ttl=1800, now=2440.0)
+
+    assert second.token != first.token
+    assert json.loads(store.get(second.key))["token"] == second.token
+
+
+def test_taking_over_from_ourselves_locks_out_the_attempt_that_died():
+    """The predecessor must not be able to delete the lease its successor now holds -- that is the
+    whole point of the token, and a self-takeover is the case where both owners are the same string."""
+    store = MemoryStore()
+    me = "gamerec-ingest-29842757-vr9wx/1"
+    first = acquire(store, owner=me, ttl=1800, now=1000.0)
+    second = acquire(store, owner=me, ttl=1800, now=2440.0)
+
+    first.release()
+    assert store.get(second.key) is not None
+    assert first.renew(now=2500.0) is False
+
+
+def test_a_different_pod_still_gets_the_door_closed_on_it():
+    """The takeover keys on identity, not on time. A live competitor is still a competitor."""
+    store = MemoryStore()
+    acquire(store, owner="gamerec-ingest-29842757-vr9wx/1", ttl=1800, now=1000.0)
+
+    with pytest.raises(LeaseHeld) as raised:
+        acquire(store, owner="gamerec-fill-abcde/1", ttl=1800, now=2440.0)
+
+    assert "gamerec-ingest-29842757-vr9wx/1" in str(raised.value)
