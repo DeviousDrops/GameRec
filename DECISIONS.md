@@ -748,3 +748,124 @@ routes, which is safe only because the mount is registered last; tests/test_web.
 reordering, because the symptom would be every probe 404ing and Kubernetes pulling the pod out of its
 Service. (a) spends a container and a rollout on serving three files. (b) adds a toolchain, and a
 Node build stage in a Python image is a second supply chain for a page with no dependencies.
+
+### D51 — The model's batch size is set in the embedder, not by its callers
+
+**Context:** the first nightly ingest on the real VM was OOM-killed. It fetched 199 games, wrote them
+to the corpus and merged 200 entries into the name index, then died embedding that batch, before its
+first insert — which is why `/health` reported `corpus_size: 0` alongside `name_index_size: 200`, and
+why the retry found the ingest lease held by its own dead predecessor and correctly declined to run.
+Nothing in the pod's status said "OOM": the first attempt's state had already been garbage-collected,
+and only `dmesg` still held the verdict. `fastembed.TextEmbedding.embed()` defaults to
+`batch_size=256` and pads every text in a run to the longest one in that run, so the cost is
+batch × longest sequence. Measured on the VM against 200 real rendered documents, model already
+resident at ~290Mi:
+
+| onnx batch | peak | throughput |
+|---|---|---|
+| 16 | 364Mi | 14.1 docs/s |
+| 32 | 376Mi | 13.2 docs/s |
+| 64 | 487Mi | 12.3 docs/s |
+| 256 (default) | 1202Mi | 11.3 docs/s |
+
+**Options:** (a) raise the ingest's memory limit to ~1.5Gi; (b) shrink `ingest.run.BATCH_SIZE` from
+200 until it fits; (c) cap the batch handed to ONNX inside `Embedder`, leaving callers' batch sizes
+alone.
+**Choice:** (c), at 32. `embed_documents` chunks internally, so peak memory is a property of the
+embedder rather than of whoever calls it. The ingest's 200 stays what it always was: the unit of
+durable progress between a corpus append and a checkpoint.
+**Trade-off:** there is no accuracy cost — the vectors are bit-identical across every batch size
+measured, so this is genuinely free — and no throughput cost either, since the padding avoided was
+work as well as memory. What it does cost is a place where a number matters invisibly: 32 is measured
+on a 2 vCPU host and nothing enforces it against a machine with room for more. (a) buys nothing on a
+4 GiB host already running MinDB, a backup sidecar and the API, and would have to be bought again at
+the next model. (b) conflates two unrelated concerns, which is the bug this fixes: it would make the
+durability granularity of the corpus a function of how much RAM the embedder wants.
+
+### D52 — A Backup Generation is written when the vectors change, not when MinDB writes
+
+**Context:** the sidecar watched the snapshot's mtime and treated any change as a reason to upload a
+generation. MinDB writes its snapshot every `-snapshot-interval` whether or not anything was inserted,
+so on the live VM the result was a full generation every 63 seconds, each one pruning a good
+generation to make room for itself. Confirmed from the manifests in R2: `mindb.snap` was
+byte-identical across all seven retained generations — same sha256, 24 bytes — while
+`mindb.snap.meta` differed every time, because MinDB stamps it on every write. Two costs. Seven
+retained generations spanned seven minutes instead of a week of nightlies, which is retention that
+looks like a week on paper and is not. And the volume, which is invisible today only because the
+corpus is empty: at full capacity the snapshot is ~310 MB, so this is ~446 GB a day of uploads off a
+burstable VM's uplink, forever, to preserve nothing that changed.
+
+**Options:** (a) raise `-snapshot-interval` so MinDB rewrites less often; (b) compare the vectors
+rather than the mtime, and skip a snapshot whose bytes have not changed; (c) move backups onto their
+own schedule, decoupled from MinDB entirely.
+
+**Choice:** (b), plus the watch interval from 60s to 15 minutes. mtime stays as the cheap trigger to
+look; the digest of the vectors decides whether to upload. The digest deliberately excludes the
+`.meta`, since including it would compare a timestamp and always report a change. The interval is now
+a ceiling on how often a *busy* service writes generations rather than a match for MinDB's timer:
+during the initial fill the vectors genuinely do change every minute, and minute-granularity backups
+of a derived index are not worth 446 GB a day.
+
+**Trade-off:** up to 15 minutes of vectors can be lost that were previously covered, which is a
+reindex or a partial re-ingest, never lost documents — MinDB is derived and the Game Document Store
+is the source of truth (D13, ADR-0003). The subtler cost is that "the newest generation is recent" is
+no longer a health check: an idle service correctly writes nothing, so the check becomes "a generation
+newer than the last ingest", and `deploy/vm/README.md` had to stop telling anyone to look for a fresh
+timestamp. (a) reduces the waste without removing it and spends MinDB's own crash durability to do it.
+(c) is more machinery for a schedule the snapshot's own mtime already provides, and it cannot live in
+its own pod anyway while the snapshot is on a ReadWriteOnce volume.
+
+### D53 — A Backup Generation always carries a real Checkpoint
+
+**Context:** found while verifying the restore on the VM, before running it. `back_up_once` used
+`b"{}"` as the checkpoint when there was none on disk, on the reasoning that a snapshot is worth
+keeping either way. Seven such generations were in the bucket, every digest correct, all of them
+restorable — and restoring one writes `{}` into the corpus directory, where `Checkpoint.load` raises
+`KeyError: 'model_stamp'`. The next ingest would not report a bad restore; it would crash. This is the
+failure ADR-0002 is about, arriving by a route ADR-0002 did not cover: the invariant
+`checkpoint <= snapshot` was enforced for a checkpoint that claims too much, and not for one that
+cannot be read at all. `fetch_generation` verified sha256 for every file, which proves the bytes
+arrived as they left and says nothing about whether they were ever a Checkpoint.
+
+**Options:** (a) make `Checkpoint.load` tolerate a malformed file and return None; (b) stop writing a
+generation when there is no checkpoint, and have a restore verify the checkpoint it is about to
+install; (c) leave it and document that a generation from before the first ingest must not be
+restored.
+
+**Choice:** (b), at both ends. No checkpoint means nothing has finished ingesting, so there is nothing
+a generation would preserve — an empty index is rebuilt by starting the ingest, not by a restore.
+And `fetch_generation` now parses the checkpoint through `Checkpoint.from_bytes` and refuses anything
+that is not COMPLETE, which also covers the generations already in the bucket.
+
+**Trade-off:** a restore now has one more way to refuse, and refusals are load-bearing at exactly the
+moment someone is under pressure — so both messages say which generation and what was wrong with it,
+rather than "invalid checkpoint". (a) is tempting and wrong: a corpus directory whose checkpoint
+silently reads as "no ingest has happened" is how a fill quietly restarts from zero, and the whole
+point of the file is to be trusted. (c) puts a sharp edge in a runbook and waits.
+
+### D54 — Plain HTTP redirects, which needs a Traefik CRD
+
+**Context:** verifying TLS on the live VM, `https://game-rec.duckdns.org/livez` returned 200 with a
+valid Let's Encrypt certificate and `http://game-rec.duckdns.org/livez` returned **404**. The
+annotation in `50-ingress.yaml` said "Redirect plain HTTP rather than serving both", and
+`router.entrypoints: websecure` does not redirect anything — it binds the router to 443, leaving port
+80 with no router and Traefik answering with its own 404. The comment described an intention. It
+mattered little while this was an API; it matters now that the API serves a page a person types a
+hostname to reach (D50).
+
+**Options:** (a) correct the comment and keep the 404; (b) a Traefik `Middleware` CRD with
+`redirectScheme`, referenced from the Ingress; (c) `HelmChartConfig` to set Traefik's `web` entrypoint
+to redirect cluster-wide.
+
+**Choice:** (b), as a second Ingress bound to the `web` entrypoint rather than one Ingress bound to
+both. A single router carrying the redirect would also see requests that are already https, and
+whether that is a no-op or a redirect loop depends on how Traefik compares the rewritten URL to the
+original. Two routers cannot loop, and the difference costs one object.
+
+**Trade-off:** this is the one file in the deploy that names its Ingress controller, which is exactly
+what D40 avoided by keeping the Ingress a plain manifest. The mitigation is that it is additive: the
+`gamerec` Ingress is unchanged, so on a cluster without Traefik the TLS router still works and the
+redirect is the only thing missing. It is also a CRD, which AGENTS.md asks be justified — k3s ships
+Traefik and its CRDs, so this adds an object and not a dependency, and no operator is installed.
+(c) redirects for everything on the node through Helm values, which is both broader than this service
+and the Helm layer this project stays out of. (a) is honest and leaves a hostname that 404s.
