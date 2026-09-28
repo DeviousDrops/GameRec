@@ -91,13 +91,15 @@ Service, the API got `Connection refused` to the ClusterIP, `/readyz` went 503, 
 down -- caused entirely by a backup failure. It was marked *exercised* because MinDB had been watched
 not restarting. Nobody had checked whether it was still reachable.
 
-The sidecar now catches every failure and keeps running (D49), and `last` is deliberately not advanced
-on failure, so a transient R2 error costs one interval rather than one generation. The probe decision
-in D39 is unchanged and was never the problem.
+The sidecar now catches every failure and keeps running (D49), and neither watch marker is advanced on
+failure, so a transient R2 error costs one interval rather than one generation. The probe decision in
+D39 is unchanged and was never the problem.
 
 **Nothing inside the cluster notices backups have stopped** -- that is still true, and now it is the
 whole story rather than a footnote. The alert worth having is "the newest generation is older than a
-day", and it has to live outside the cluster.
+day", and it has to live outside the cluster. That threshold is not arbitrary and it survives D52's
+change to when generations are written: a generation is written when the vectors change, the nightly
+ingest changes them, so a day with no generation is a day with no ingest.
 
 Ingest running without a lease is deliberate too: backups are worth more than mutual exclusion, and
 the cost of two concurrent ingests is repeated work, because every insert is keyed by appid.
