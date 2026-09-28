@@ -97,16 +97,28 @@ def readyz() -> dict:
 
 @app.get("/health")
 def health() -> dict:
-    """Reports the kernel MinDB actually selected, so benchmark numbers can be tied to one."""
+    """Whether the service is working. What it is built from only when HEALTH_DETAIL is set.
+
+    The split is not about secrecy -- everything behind it is in a public repo. It is that this
+    endpoint answers the open internet, and an attacker reads `kernel=avx2 goarch=amd64 capacity=200000`
+    as a free fingerprint while an operator can get the same from inside the cluster. `dims` and the WAL
+    flags stay on both sides because smoke.sh fails the deploy on them (D56).
+    """
     try:
         stats = state["mindb"].stats()
     except grpc.RpcError as error:
         raise _unavailable(error) from error
-    return {
+    body = {
         "status": "ok",
         "corpus_size": stats.vector_count,
-        "capacity": stats.capacity,
         "dims": stats.dims,
+        "name_index_size": len(_names()),
+        "wal_healthy": stats.wal_healthy if stats.wal_enabled else None,
+    }
+    if not config.health_detail:
+        return body
+    return body | {
+        "capacity": stats.capacity,
         "model_stamp": MODEL_STAMP,
         "template_version": TEMPLATE_VERSION,
         "mindb": {
@@ -116,7 +128,6 @@ def health() -> dict:
             "wal_enabled": stats.wal_enabled,
             "wal_healthy": stats.wal_healthy,
         },
-        "name_index_size": len(_names()),
     }
 
 

@@ -15,6 +15,11 @@ class Config:
     # Blends mood-query similarity with seed-game similarity when both are given (D10).
     mood_weight: float = float(os.environ.get("MOOD_WEIGHT", "0.6"))
     review_floor: int = int(os.environ.get("REVIEW_FLOOR", "50"))
+    # Whether /health reports what MinDB and the model are, on top of whether they work. Off by
+    # default because the API is reachable from the internet and that detail -- kernel, architecture,
+    # index capacity, exact model -- identifies the stack to anyone who asks, while telling an
+    # operator nothing they cannot get from inside the cluster.
+    health_detail: bool = os.environ.get("HEALTH_DETAIL", "false").lower() == "true"
     groq_api_key: str = os.environ.get("GROQ_API_KEY", "")
     groq_model: str = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 

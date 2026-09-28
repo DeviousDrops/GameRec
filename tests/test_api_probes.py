@@ -45,6 +45,11 @@ class Present:
         return {i: np.ones(384, dtype=np.float32) for i in ids}
 
 
+class _NoWal(Present):
+    def stats(self) -> Stats:
+        return dataclasses.replace(super().stats(), wal_enabled=False, wal_healthy=False)
+
+
 def _rpc_error(code: grpc.StatusCode) -> grpc.RpcError:
     error = grpc.RpcError()
     error.code = lambda: code
@@ -97,10 +102,31 @@ def test_a_query_during_a_restart_is_503_not_500(api):
     assert "Retry-After" in raised.value.headers
 
 
-def test_health_reports_the_kernel_mindb_selected(api):
+def test_health_answers_the_internet_without_naming_the_stack(api):
+    """The default. Enough to tell whether the service works, and nothing that fingerprints it (D56)."""
     api["mindb"] = Present()
     body = main.health()
+
+    assert body["corpus_size"] == 200 and body["dims"] == 384 and body["wal_healthy"] is True
+    assert not {"capacity", "model_stamp", "template_version", "mindb"} & set(body)
+
+
+def test_health_reports_the_kernel_mindb_selected_when_detail_is_on(api, monkeypatch):
+    """The benchmark rule in ADR-0006 needs the kernel from a running service, so it stays available
+    -- behind a flag an operator sets, reachable from inside the cluster."""
+    monkeypatch.setattr(main, "config", dataclasses.replace(main.config, health_detail=True))
+    api["mindb"] = Present()
+    body = main.health()
+
     assert body["mindb"]["kernel"] == "avx2" and body["corpus_size"] == 200
+    assert body["capacity"] == 5000 and body["model_stamp"] and body["template_version"]
+
+
+def test_wal_healthy_is_none_rather_than_false_without_a_wal(api):
+    """smoke.sh fails a deploy on an unhealthy WAL. `false` and `no WAL at all` are different states
+    and collapsing them would fail every deploy of a MinDB built without one."""
+    api["mindb"] = _NoWal()
+    assert main.health()["wal_healthy"] is None
 
 
 def test_the_name_index_reloads_when_ingest_rewrites_it(api, tmp_path):

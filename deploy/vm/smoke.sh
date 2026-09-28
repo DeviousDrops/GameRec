@@ -42,13 +42,21 @@ import json
 import sys
 
 health = json.loads(sys.argv[1])
-mindb = health["mindb"]
-print(f"corpus      {health['corpus_size']} of {health['capacity']} vectors, {health['dims']} dims")
-print(f"names       {health['name_index_size']}")
-print(f"stamp       {health['model_stamp']} template {health['template_version']}")
 flag = lambda value: str(value).lower()  # as /health reported it, not as Python spells it
-print(f"mindb       kernel={mindb['kernel']} goarch={mindb['goarch']} "
-      f"fast_int8={flag(mindb['fast_int8'])} wal_healthy={flag(mindb['wal_healthy'])}")
+
+# The stack detail is absent unless HEALTH_DETAIL is set, which it is not in production (D56). Every
+# check below works either way; only the printing gets shorter.
+mindb = health.get("mindb", {})
+capacity = f" of {health['capacity']}" if "capacity" in health else ""
+print(f"corpus      {health['corpus_size']}{capacity} vectors, {health['dims']} dims")
+print(f"names       {health['name_index_size']}")
+if "model_stamp" in health:
+    print(f"stamp       {health['model_stamp']} template {health['template_version']}")
+if mindb:
+    print(f"mindb       kernel={mindb['kernel']} goarch={mindb['goarch']} "
+          f"fast_int8={flag(mindb['fast_int8'])} wal_healthy={flag(mindb['wal_healthy'])}")
+else:
+    print(f"mindb       wal_healthy={flag(health['wal_healthy'])} (detail withheld)")
 
 problems = []
 # An empty index answers every query with nothing and looks healthy doing it, which is exactly the
@@ -57,7 +65,8 @@ if health["corpus_size"] == 0:
     problems.append("the index is empty: restore a generation or run ingest.reindex")
 if health["dims"] != 384:
     problems.append(f"MinDB is {health['dims']}-dimensional, the model produces 384")
-if mindb["wal_enabled"] and not mindb["wal_healthy"]:
+# wal_healthy is None when MinDB has no WAL, and False only when it has a broken one.
+if health["wal_healthy"] is False:
     problems.append("MinDB reports an unhealthy WAL")
 if problems:
     print("\n".join(f"FAIL: {p}" for p in problems), file=sys.stderr)

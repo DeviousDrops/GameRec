@@ -61,7 +61,9 @@ back to back, and once credits are gone it runs at the baseline share. Plan a re
 the ~20 minutes the benchmark CPU would suggest.
 
 This host is x86_64, so MinDB selects its AVX2 int8 kernel rather than the pure-Go fallback — `/health`
-reports which, and every benchmark this project quotes carries that label (ADR-0006, D46).
+reports which with `HEALTH_DETAIL=true`, and every benchmark this project quotes carries that label
+(ADR-0006, D46). The flag is off in production, so benchmarking the live service means setting it in
+the ConfigMap, rolling the API, and putting it back (D56).
 
 ## Before the first bootstrap
 
@@ -145,7 +147,8 @@ kubectl -n gamerec logs -f job/gamerec-fill
 
 Four things fail independently, so the script checks them separately: `/livez` (the process),
 `/readyz` (MinDB behind it, retried for half a minute because a rollout is downtime measured in
-seconds), `/health` (dimensions, stamp, the kernel MinDB chose, and whether the index is empty) and
+seconds), `/health` (dimensions, the WAL, and whether the index is empty — the stack detail is off by
+default and the script does not need it, D56) and
 one `/recommend?narrate=false`. It is read-only and safe against production — one embedding, no
 writes. An empty index is a failure rather than a pass: it answers every query with nothing while
 looking perfectly healthy.
@@ -226,8 +229,8 @@ as written. Done, first-hand:
 
 - `bootstrap.sh` end to end on a fresh Ubuntu 24.04 VM: swap off, k3s pinned and installed, manifests
   applied, both rollouts green.
-- The images pull and run on x86_64. `/health` reports the `avx2` kernel with `fast_int8`, which is
-  the number benchmarks get labelled with.
+- The images pull and run on x86_64. With `HEALTH_DETAIL=true`, `/health` reports the `avx2` kernel
+  with `fast_int8`, which is the label benchmarks carry (D56).
 - The backup sidecar taking a real backup with real R2 credentials. It wrote a generation with its
   COMPLETE marker and sha256 manifest, and `ops.restore --list` read it back.
 - One outage, unplanned and worth more than the rest: a wrong bucket name crash-looped the sidecar,
