@@ -90,7 +90,16 @@ def host_context() -> dict:
 
 
 def mindb_context(health: dict) -> dict:
-    mindb = health.get("mindb", {})
+    # /health withholds the stack detail unless HEALTH_DETAIL is set, which production leaves off
+    # (D56). Refusing here is the point: a label reading `kernel=None` is worse than no run at all,
+    # because it is a number that looks measured and is not attributable to any CPU.
+    if "mindb" not in health:
+        raise SystemExit(
+            "this service does not report its kernel: /health has no `mindb` block, so HEALTH_DETAIL "
+            "is off. A benchmark with no kernel label is not a benchmark (ADR-0006). Set "
+            "HEALTH_DETAIL=true on the API and rerun."
+        )
+    mindb = health["mindb"]
     return {
         "mindb": f"kernel={mindb.get('kernel')} goarch={mindb.get('goarch')} "
                  f"fast_int8={mindb.get('fast_int8')}",

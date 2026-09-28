@@ -2,6 +2,8 @@
 
 Every number here is labelled with the architecture and the kernel MinDB actually selected,
 because MinDB's int8 cascade has an AVX2 kernel that does not exist on ARM (ADR-0006, D23). The
+label comes from `/health`, which withholds it unless `HEALTH_DETAIL` is set (D56); `bench.latency`
+exits rather than print a run it cannot attribute to a kernel. The
 deployed host is an Azure `Standard_B2als_v2` — x86_64, so it gets the AVX2 kernel, and **the tables
 below describe the right kernel on the wrong CPU**: they were measured on a 20-thread i7-13700H and
 production has 2 burstable vCPU (D46). Same arithmetic, less of it at once.

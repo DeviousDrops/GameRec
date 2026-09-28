@@ -104,7 +104,8 @@ decisions that were hard to reverse.
   credential to check, reachability is the access control.
 - **Benchmarks are labelled by architecture, and the label is checked.** MinDB's int8 cascade has an
   AVX2 kernel that does not exist on ARM, so the same code is materially faster on one host than another.
-  `/health` reports the kernel MinDB actually selected, and every number in
+  `/health` reports the kernel MinDB actually selected — when `HEALTH_DETAIL` is set, which production
+  leaves off so that an internet-facing endpoint does not hand out a fingerprint (D56) — and every number in
   [bench/README.md](bench/README.md) carries it (a mood query is 7.6 ms at p50 against a small corpus,
   and Search alone is 4.0 ms at 200,000 vectors). The deployed host is x86_64 and reports `avx2`, so the
   published tables describe the right *kernel* — on a different CPU, which the tables also say. The
