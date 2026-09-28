@@ -151,21 +151,27 @@ costs nothing that is not already on disk. A second holder failing to acquire th
 
 ## The ingest is OOM-killed
 
-*Exercised, unintentionally: the first nightly run on the VM, 03:22 UTC on 2026-09-27 (D51).*
+*Exercised, unintentionally, twice: the nightly runs of 2026-09-27 and 2026-09-28, both at 03:22 UTC
+(D51). The second happened because the fix was merged and never deployed.*
 
 ```
-symptom     the CronJob reports Completed and the corpus is empty:
-            /health gives corpus_size 0 next to name_index_size 200
-behaviour   the retry acquires nothing -- it finds the lease held by its own dead
-            predecessor, logs that, and exits 0
-recovery    none until the next run, which resumes and re-fetches only what is missing
+symptom     the CronJob reports Completed and the corpus has documents but no vectors:
+            /health gives corpus_size 0 next to a non-zero name_index_size
+behaviour   the retry takes over the lease its own dead attempt left behind and runs
+            (D55). Before D55 it exited 0 instead, and the Job reported success
+recovery    the retry, or failing that the next nightly run, which resumes and
+            re-fetches only what is missing
 ```
 
-This is the most misleading failure in this document, because every layer reports success. The Job
-succeeded, the pod says `Completed`, exit code 0, and the surviving log says the lease is held --
-which is the lease working. The kill happened in the attempt before, whose container status is
-garbage-collected within hours, so `kubectl logs --previous` answers `not found` and nothing in
-Kubernetes remembers why. The verdict only survives in the kernel log:
+This was the most misleading failure in this document, because every layer reported success. The Job
+succeeded, the pod said `Completed`, exit code 0, and the surviving log said the lease was held —
+which reads like the lease working. It was not: the holder was the dead attempt in the same
+container, wearing the same name. D55 makes the retry take it over, so an OOM now costs a restart
+rather than a night, and a Job that reports success has ingested something.
+
+What does not change is where the evidence lives. The kill happens in the attempt before, whose
+container status is garbage-collected within hours, so `kubectl logs --previous` answers `not found`
+and nothing in Kubernetes remembers why. The verdict only survives in the kernel log:
 
 ```
 sudo dmesg -T | grep -i oom-kill      # names the cgroup, the pid and the RSS at death
@@ -178,8 +184,9 @@ are not fetched again. That is the ordering in D13 paying off in the direction i
 the corpus can run ahead of the vectors, never behind them.
 
 Two things make this cheap rather than serious, and both are worth keeping: a run holds the lease for
-a TTL rather than until it exits, so a dead holder blocks at most one retry window; and the fix
-belongs in whatever grew past the limit, not in the limit. See D51.
+a TTL rather than until it exits, so even without the self-takeover a dead holder blocks one retry
+window and not the next night; and the fix belongs in whatever grew past the limit, not in the limit.
+See D51 and D55.
 
 ## The final snapshot fails
 

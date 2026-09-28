@@ -245,17 +245,34 @@ as written. Done, first-hand:
   corpus: listing generations, verifying the sha256 of every file in the manifest, writing them
   snapshot-last. It also turned up D53 — a generation built before any ingest finished carried `{}`
   where its checkpoint should be, and restoring it reported success.
+- **The service answering.** `ingest.reindex` turned 397 documents into 397 vectors in 37 seconds at
+  the 1Gi limit, no restarts, which is D51's measured numbers holding on the real host. `smoke.sh`
+  exits 0, and a mood query for factory automation returns Factorio at 0.704 while `seed=Portal 2`
+  returns Portal at 0.828 — retrieval and the name index both doing their jobs, end to end over
+  HTTPS in 0.23s.
+- **The plain-HTTP redirect** (D54). `http://game-rec.duckdns.org/livez` answers 301 to https.
+- **Both backup fixes, observed rather than reasoned about.** In one 37-minute window the sidecar
+  declined to back up a corpus with no checkpoint (D53), wrote exactly one generation once there was
+  one, pruned the oldest to stay inside retention, and then — with `mindb.snap` freshly rewritten by
+  MinDB, mtime and all — logged `snapshot rewritten with the same vectors; no new generation` (D52).
+  Under 0.1.0 that last tick would have been the eighth generation in 37 minutes.
+
+Two things worth knowing about how that was checked. Counting generations cannot detect a new one,
+because retention caps the count and a write prunes the oldest in the same breath — compare the
+newest *name*. And the seven generations sitting in R2 before this all carried `{}` as their
+checkpoint, so for a day the only restorable history was unrestorable.
 
 Not done yet, and not to be read as working:
 
 - **A restore in-cluster**, meaning MinDB booting from a snapshot it did not write. The download half
-  is exercised (above); nothing has yet been restored over `/data` and started. Worth doing with
-  vectors in it rather than while the corpus is empty, since an empty index restores to an empty index
-  and proves little.
-- **The nightly ingest completing.** It has run once, and was OOM-killed embedding its first batch
-  (D51). The corpus on the VM is 199 documents and no vectors.
-- **The initial fill**, and therefore anything about behaviour at 176k games rather than 200.
-- **The plain-HTTP redirect** (D54), which is a manifest away and has only been dry-run.
+  is exercised (above); nothing has yet been restored over `/data` and started. There is now a
+  generation worth restoring — real vectors against a COMPLETE checkpoint — so the remaining
+  question is the write half. The procedure needs MinDB scaled to zero, and it is much cheaper to
+  rehearse at today's corpus size than after the fill.
+- **The nightly ingest completing.** It has run twice and been OOM-killed both times (D51), the second
+  time only because the fix was tagged and not deployed. The vectors serving today came from a manual
+  reindex, not from an ingest run.
+- **The initial fill**, and therefore anything about behaviour at 176k games rather than 397.
 - **A deliberate reboot.**
 
 The script is idempotent so that correcting it stays cheap: fix, `git pull`, run it again.
