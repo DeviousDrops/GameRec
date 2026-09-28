@@ -10,9 +10,11 @@ Every fact that ends up in a Game Document comes from Steam itself.
 from __future__ import annotations
 
 import logging
+import math
 import random
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 import httpx
 
@@ -22,6 +24,13 @@ log = logging.getLogger(__name__)
 
 STEAMSPY_ALL = "https://steamspy.com/api.php"
 APPDETAILS = "https://store.steampowered.com/api/appdetails"
+
+# `request=all` answers in fixed pages of 1000, ordered by owner estimate, and SteamSpy documents its
+# own much slower budget for that one request: "1 request per 60 seconds for the *all* requests". It is
+# a different host from appdetails with a different ceiling, so it gets its own pacing rather than
+# spending Steam's tokens (D57).
+STEAMSPY_PAGE_SIZE = 1000
+STEAMSPY_ALL_PER_MIN = 1.0
 
 # Steam tolerates roughly 200 requests per 5 minutes. Pacing against that budget is the RateLimiter's
 # job (D17); this delay survives only as the fallback for callers that pass no limiter.
@@ -34,7 +43,9 @@ class FetchFailed(RuntimeError):
     ends up permanently labelled not_a_game."""
 
 
-@dataclass
+# slots because a full fill holds one of these per appid in the catalogue -- ~285,000 of them -- and
+# this is the only object in the ingest that exists in that quantity at once.
+@dataclass(slots=True)
 class Popular:
     appid: int
     name: str
@@ -42,24 +53,47 @@ class Popular:
 
 
 def fetch_popular(
-    limit: int, client: httpx.Client | None = None, limiter: RateLimiter | None = None
+    limit: int,
+    client: httpx.Client | None = None,
+    pacer: RateLimiter | None = None,
+    on_page: Callable[[], bool] | None = None,
 ) -> list[Popular]:
-    """Top games by owner count, in popularity order."""
+    """Up to `limit` games by popularity, in popularity order, paging SteamSpy to get there (D57).
+
+    One page is 1000 games, so a `--limit` above that needs more than one request and each costs a
+    minute of waiting. `on_page` is called after every page and returns False to stop -- the ingest
+    passes its lease renewal, because paging the whole catalogue takes hours and a lease that quietly
+    expires while this runs is exactly the overlap the lease exists to prevent (D17).
+
+    Rows are keyed by appid rather than collected into a list: the catalogue shifts under a run that
+    takes hours, and a game that moves between pages would otherwise be fetched twice.
+    """
     owns = client or httpx.Client(timeout=30)
+    pacer = pacer or RateLimiter(STEAMSPY_ALL_PER_MIN, burst=1)
+    rows: dict[int, Popular] = {}
     try:
-        if limiter is not None:
-            limiter.acquire()
-        page = owns.get(STEAMSPY_ALL, params={"request": "all", "page": 0}).json()
+        for number in range(math.ceil(max(limit, 1) / STEAMSPY_PAGE_SIZE)):
+            pacer.acquire()
+            page = owns.get(STEAMSPY_ALL, params={"request": "all", "page": number}).json()
+            for appid, row in page.items():
+                if row.get("name"):
+                    rows[int(appid)] = Popular(
+                        int(appid), row["name"],
+                        int(row.get("positive", 0)) + int(row.get("negative", 0)),
+                    )
+            log.info("steamspy page %d: %d games in the ordering so far", number, len(rows))
+            # A short page is the end of the catalogue, and asking for the one after it returns an
+            # empty object rather than an error -- so this is the only signal that there is no more.
+            if len(page) < STEAMSPY_PAGE_SIZE:
+                break
+            if on_page is not None and not on_page():
+                log.error("stopping the popularity scan after page %d", number)
+                break
     finally:
         if client is None:
             owns.close()
-    rows = [
-        Popular(int(appid), row["name"], int(row.get("positive", 0)) + int(row.get("negative", 0)))
-        for appid, row in page.items()
-        if row.get("name")
-    ]
-    rows.sort(key=lambda r: r.review_count, reverse=True)
-    return rows[:limit]
+    ordered = sorted(rows.values(), key=lambda r: r.review_count, reverse=True)
+    return ordered[:limit]
 
 
 def fetch_details(
