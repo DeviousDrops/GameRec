@@ -33,8 +33,13 @@ measured in seconds. That is the trade the 503 and the `Retry-After` exist to pa
 
 ## MinDB's snapshot is gone or corrupt
 
-*Exercised: restored a generation over a volume and booted MinDB from it -- `loaded=200`, WAL
-checked against the restored `.meta`.*
+*Exercised on k3d: restored a generation over a volume and booted MinDB from it -- `loaded=200`, WAL
+checked against the restored `.meta`. Attempted in the cluster on 2026-09-28 and it failed: the Job
+runs as 65532 and the checkpoint on the PVC belongs to the ingest's 10001, so the write was refused
+(D58). Nothing was lost -- the checkpoint is written before the snapshot exactly so that dying there
+is the recoverable half -- but MinDB was down for seven minutes rather than the ninety seconds the
+procedure implies, and the API needed `kubectl rollout restart deploy/gamerec-api` to come back.
+Treat the write half as unproven in the cluster until it has run there once.*
 
 ```
 symptom     MinDB boots with vector_count 0; /health shows corpus_size 0

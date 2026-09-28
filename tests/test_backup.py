@@ -405,3 +405,56 @@ def test_a_one_shot_run_with_no_store_still_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(backup.objectstore, "from_config", lambda _config: None)
     monkeypatch.setattr("sys.argv", ["backup", f"--snapshot={tmp_path / 'x.snap'}"])
     assert backup.main() == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes; the uids this protects are Linux uids")
+def test_a_restore_replaces_a_checkpoint_it_cannot_open_for_writing(store, tmp_path):
+    """The bug this prevents, first-hand: the in-cluster restore died on
+    `PermissionError: [Errno 13] /corpus/checkpoint.json`. The Job runs as MinDB's 65532 so the
+    snapshot it writes belongs to the process that loads it, and the checkpoint already on the PVC
+    belongs to the ingest's 10001 at 0644. Overwriting it in place is refused; replacing it is not,
+    because /corpus is world-writable and a rename asks the directory for permission (D58).
+
+    Local tests never caught it because it only fails when a checkpoint is already there.
+    """
+    config, snapshot_path = prepare(tmp_path / "live", data=b"the vectors")
+    prefix = backup.back_up_once(store, config, snapshot_path)
+
+    restored = tmp_path / "restored"
+    restored.mkdir()
+    target = restored / "checkpoint.json"
+    target.write_bytes(b"{}")
+    os.chmod(target, 0o444)  # the shape of a file owned by another uid: readable, not writable
+
+    restore.write_files(restore.fetch_generation(store, prefix), restored / "mindb.snap", target,
+                        force=True)
+
+    assert Checkpoint.load(target).status == COMPLETE
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes; the uids this protects are Linux uids")
+def test_a_restored_checkpoint_is_readable_by_the_next_ingest(store, tmp_path):
+    """The mirror of the bug above, and the one that would have been worse: a checkpoint written at a
+    default 0600 by uid 65532 is unreadable to the uid that resumes from it, so the next ingest would
+    start again from nothing on a full corpus."""
+    config, snapshot_path = prepare(tmp_path / "live", data=b"the vectors")
+    prefix = backup.back_up_once(store, config, snapshot_path)
+
+    restored = tmp_path / "restored"
+    restore.write_files(restore.fetch_generation(store, prefix), restored / "mindb.snap",
+                        restored / "checkpoint.json")
+
+    assert (restored / "checkpoint.json").stat().st_mode & 0o044 == 0o044
+
+
+def test_a_restore_leaves_no_temporary_files_behind(store, tmp_path):
+    """tmp + rename is only atomic if the rename happens. A leftover .tmp beside the snapshot would
+    also be the next backup's problem: the sidecar digests what it finds in the directory."""
+    config, snapshot_path = prepare(tmp_path / "live", data=b"the vectors")
+    prefix = backup.back_up_once(store, config, snapshot_path)
+
+    restored = tmp_path / "restored"
+    restore.write_files(restore.fetch_generation(store, prefix), restored / "mindb.snap",
+                        restored / "checkpoint.json")
+
+    assert not list(restored.glob("*.tmp"))

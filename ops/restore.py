@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -89,6 +90,26 @@ def _verify_checkpoint(prefix: str, body: bytes | None) -> None:
         )
 
 
+# 0644, stated rather than inherited. The restore runs as MinDB's uid so the snapshot it writes is
+# owned by the process that has to load it; the next ingest runs as its own uid and has to be able to
+# read the checkpoint this leaves behind (D58).
+RESTORED_MODE = 0o644
+
+
+def _write(path: Path, body: bytes) -> None:
+    """Write via a temporary file and rename, the way the ingest writes its checkpoint.
+
+    Not `write_bytes`, for a reason that only shows up in the cluster: this Job runs as 65532 and
+    `/corpus/checkpoint.json` belongs to the ingest's 10001 at 0644, so opening it for writing is
+    EACCES. Replacing it is permitted, because the permission a rename needs is on the directory. It
+    is also atomic, which for a file whose entire purpose is to be trusted is worth having anyway.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_bytes(body)
+    os.chmod(tmp, RESTORED_MODE)
+    os.replace(tmp, path)
+
+
 def write_files(files: dict[str, bytes], snapshot_path: Path, checkpoint_path: Path,
                 force: bool = False) -> None:
     """Put a verified generation on disk, snapshot last.
@@ -112,7 +133,7 @@ def write_files(files: dict[str, bytes], snapshot_path: Path, checkpoint_path: P
             continue
         path = targets[name]
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(files[name])
+        _write(path, files[name])
         log.info("wrote %s (%d bytes)", path, len(files[name]))
 
     if "mindb.snap.meta" not in files:
