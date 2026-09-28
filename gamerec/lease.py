@@ -10,6 +10,7 @@ So a run holds a lease object in R2 for as long as it works:
     renew    rewrite the object with a later expiry, at every batch boundary
     release  delete it, but only if the token inside is still ours
     steal    an expired lease is takeable, because a pod that dies cannot release anything
+             -- and so is an unexpired one in our own name, which means the same thing sooner
 
 The token is what makes release safe. Without it, a run that lost its lease to expiry and then
 finished would delete the lease its successor is holding, and the next two runs would overlap.
@@ -109,7 +110,12 @@ def acquire(
     key: str = LEASE_KEY,
     now: float | None = None,
 ) -> Lease:
-    """Take the lease or raise LeaseHeld. Never blocks -- a queued ingest is not wanted, a skip is."""
+    """Take the lease or raise LeaseHeld. Never blocks -- a queued ingest is not wanted, a skip is.
+
+    Raises only when somebody *else* holds it. An unexpired lease in our own name belongs to a dead
+    previous attempt of this same container and is taken over, because otherwise a crash-and-restart
+    reports success (see below).
+    """
     moment = now or time.time()
     lease = Lease(store=store, key=key, owner=owner or default_owner(), token=uuid.uuid4().hex,
                   ttl=ttl, expires_at=moment + ttl)
@@ -124,16 +130,31 @@ def acquire(
         holder = _read(store, key) or {}
 
     expires_at = float(holder.get("expires_at", 0))
-    if expires_at > moment:
+    if expires_at > moment and holder.get("owner") != lease.owner:
         raise LeaseHeld(
             f"ingest lease held by {holder.get('owner')} for another "
             f"{int(expires_at - moment)}s; exiting rather than running two ingests"
         )
 
-    # Expired. A pod that was OOM-killed cannot release its lease, so an expiry has to be takeable or
-    # one bad night stops every ingest until someone notices.
-    log.warning("stealing expired lease from %s (%ds past expiry)",
-                holder.get("owner"), int(moment - expires_at))
+    # A lease held by our own identity is held by a dead predecessor, not by a competitor. `owner` is
+    # pod name plus pid, and in a Job pod the pid is always 1, so a container that is restarted in
+    # place comes back with the exact same owner string. The only way to read our own unexpired lease
+    # is to be the process after the one that wrote it and could not release it.
+    #
+    # This is not a nicety. On the VM, the 03:22 run of 2026-09-28 was OOM-killed mid-embed, restarted
+    # under restartPolicy: OnFailure, found its own 24-minute-old lease, and exited 0 because a held
+    # lease means "stand down". The Job then reported Complete with succeeded=1. An ingest that died
+    # with 1043588kB anon-rss in the kernel log looked, to everything in Kubernetes, like a success --
+    # and the retry budget was spent on the no-op that made it look that way.
+    if expires_at > moment:
+        log.warning("lease %s is held by this pod's own previous attempt (%s); it was killed before "
+                    "it could release it, so taking it over", key, holder.get("owner"))
+    else:
+        # Expired. A pod that was OOM-killed cannot release its lease, so an expiry has to be
+        # takeable or one bad night stops every ingest until someone notices.
+        log.warning("stealing expired lease from %s (%ds past expiry)",
+                    holder.get("owner"), int(moment - expires_at))
+
     store.delete(key)
     if not store.put_if_absent(key, lease._body()):
         raise LeaseHeld("lost the race to take over an expired ingest lease; exiting")
