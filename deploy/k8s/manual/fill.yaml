@@ -51,6 +51,9 @@ spec:
                 optional: true
           resources:
             requests:
+              # Same shape as the nightly, and the numbers hold at full catalogue size: the other term
+              # that grows is folding a batch into a 176,000-entry name index, measured at ~85Mi and
+              # half a second per batch. ~480Mi all together (D51).
               memory: 600Mi
               cpu: 200m
             limits:

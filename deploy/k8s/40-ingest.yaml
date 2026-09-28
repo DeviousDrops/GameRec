@@ -60,7 +60,9 @@ spec:
                     optional: true
               resources:
                 requests:
-                  # Embedding in batches of 200 is the peak; the rest of the run waits on Steam.
+                  # Measured on this VM: ~290Mi with the model resident, ~380Mi while embedding, and
+                  # the rest of the run waits on Steam. The limit was 1Gi before any of that was
+                  # measured, and the first nightly run hit 1179Mi and was OOM-killed (D51).
                   memory: 600Mi
                   cpu: 200m
                 limits:

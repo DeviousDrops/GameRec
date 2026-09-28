@@ -43,7 +43,10 @@ one replica and not two (D47):
 
 ~1.9 GiB of requests at rest and ~2.5 GiB while the nightly ingest runs, against 4 GiB with the OS and
 k3s inside it. Headroom, but not much: the two things that can spike together are the sidecar holding a
-whole snapshot in memory to upload it and an ingest embedding a batch. metrics-server is disabled in
+whole snapshot in memory to upload it and an ingest embedding a batch. The ingest's half of that was a
+guess until the first nightly run was OOM-killed by it; measured on this host it is ~290Mi with the
+model resident, ~380Mi while embedding and ~480Mi at full catalogue size, where folding a batch into a
+176,000-entry name index adds ~85Mi for half a second (D51). metrics-server is disabled in
 `bootstrap.sh` for the same reason — nothing here autoscales, so it would be ~100Mi spent on a graph.
 
 MinDB's request is what it genuinely reserves at boot — 200,000 × 384 × 4 B for the float32 store plus
