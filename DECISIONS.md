@@ -729,35 +729,29 @@ second failure wearing a monitoring costume. (c) is the principled fix and stays
 reason in 20-mindb.yaml: the snapshot is on a ReadWriteOnce volume, so a separate pod can only reach
 it by landing on the same node, which is true today and not something to depend on.
 
-### D51 — The model's batch size is set in the embedder, not by its callers
+### D54 — Plain HTTP redirects, which needs a Traefik CRD
 
-**Context:** the first nightly ingest on the real VM was OOM-killed. It fetched 199 games, wrote them
-to the corpus and merged 200 entries into the name index, then died embedding that batch, before its
-first insert — which is why `/health` reported `corpus_size: 0` alongside `name_index_size: 200`, and
-why the retry found the ingest lease held by its own dead predecessor and correctly declined to run.
-Nothing in the pod's status said "OOM": the first attempt's state had already been garbage-collected,
-and only `dmesg` still held the verdict. `fastembed.TextEmbedding.embed()` defaults to
-`batch_size=256` and pads every text in a run to the longest one in that run, so the cost is
-batch × longest sequence. Measured on the VM against 200 real rendered documents, model already
-resident at ~290Mi:
+**Context:** verifying TLS on the live VM, `https://game-rec.duckdns.org/livez` returned 200 with a
+valid Let's Encrypt certificate and `http://game-rec.duckdns.org/livez` returned **404**. The
+annotation in `50-ingress.yaml` said "Redirect plain HTTP rather than serving both", and
+`router.entrypoints: websecure` does not redirect anything — it binds the router to 443, leaving port
+80 with no router and Traefik answering with its own 404. The comment described an intention. It
+mattered little while this was an API; it matters now that the API serves a page a person types a
+hostname to reach (D50).
 
-| onnx batch | peak | throughput |
-|---|---|---|
-| 16 | 364Mi | 14.1 docs/s |
-| 32 | 376Mi | 13.2 docs/s |
-| 64 | 487Mi | 12.3 docs/s |
-| 256 (default) | 1202Mi | 11.3 docs/s |
+**Options:** (a) correct the comment and keep the 404; (b) a Traefik `Middleware` CRD with
+`redirectScheme`, referenced from the Ingress; (c) `HelmChartConfig` to set Traefik's `web` entrypoint
+to redirect cluster-wide.
 
-**Options:** (a) raise the ingest's memory limit to ~1.5Gi; (b) shrink `ingest.run.BATCH_SIZE` from
-200 until it fits; (c) cap the batch handed to ONNX inside `Embedder`, leaving callers' batch sizes
-alone.
-**Choice:** (c), at 32. `embed_documents` chunks internally, so peak memory is a property of the
-embedder rather than of whoever calls it. The ingest's 200 stays what it always was: the unit of
-durable progress between a corpus append and a checkpoint.
-**Trade-off:** there is no accuracy cost — the vectors are bit-identical across every batch size
-measured, so this is genuinely free — and no throughput cost either, since the padding avoided was
-work as well as memory. What it does cost is a place where a number matters invisibly: 32 is measured
-on a 2 vCPU host and nothing enforces it against a machine with room for more. (a) buys nothing on a
-4 GiB host already running MinDB, a backup sidecar and the API, and would have to be bought again at
-the next model. (b) conflates two unrelated concerns, which is the bug this fixes: it would make the
-durability granularity of the corpus a function of how much RAM the embedder wants.
+**Choice:** (b), as a second Ingress bound to the `web` entrypoint rather than one Ingress bound to
+both. A single router carrying the redirect would also see requests that are already https, and
+whether that is a no-op or a redirect loop depends on how Traefik compares the rewritten URL to the
+original. Two routers cannot loop, and the difference costs one object.
+
+**Trade-off:** this is the one file in the deploy that names its Ingress controller, which is exactly
+what D40 avoided by keeping the Ingress a plain manifest. The mitigation is that it is additive: the
+`gamerec` Ingress is unchanged, so on a cluster without Traefik the TLS router still works and the
+redirect is the only thing missing. It is also a CRD, which AGENTS.md asks be justified — k3s ships
+Traefik and its CRDs, so this adds an object and not a dependency, and no operator is installed.
+(c) redirects for everything on the node through Helm values, which is both broader than this service
+and the Helm layer this project stays out of. (a) is honest and leaves a hostname that 404s.
