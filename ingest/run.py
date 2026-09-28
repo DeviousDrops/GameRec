@@ -171,7 +171,10 @@ def _run(args, config, embedder, current, recorded, lease) -> int:
     checkpoint.appids |= store.appids()
 
     limiter = RateLimiter(config.steam_requests_per_min, config.steam_burst)
-    candidates = fetch_popular(args.limit, limiter=limiter)
+    # The lease is renewed per page, not just per batch: above one page the popularity scan is the
+    # longest single phase of a fill, and nothing else touches the lease until the first batch ends
+    # (D57).
+    candidates = fetch_popular(args.limit, on_page=lease.renew if lease is not None else None)
     targets = plan(candidates, checkpoint.appids, config.max_updates_per_run)
     log.info("%d candidates, %d to fetch this run (%d already seen)",
              len(candidates), len(targets), len(checkpoint.appids))

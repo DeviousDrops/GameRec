@@ -14,6 +14,11 @@ saves index space and quality, not ingest time.
 
 ## Consequences
 
+The ordering itself has to be fetched before any of it can be used, and SteamSpy serves it in pages of
+1000 at one request per minute — so a full fill opens with roughly three hours of paging during which
+nothing is ingested, and the Ingest Lease is renewed per page to cover it (D57). A fill bounded to the
+first page skips that phase, which is the cheap way to get a useful corpus quickly.
+
 Fill order is by third-party popularity estimates, so the most-wanted games are searchable within hours
 rather than days. Those estimates order the work and never become data. The partial-corpus week is a
 documented property of a fresh deployment, not a bug to be explained away when recommendations are thin.
