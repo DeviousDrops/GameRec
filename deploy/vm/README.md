@@ -43,7 +43,10 @@ one replica and not two (D47):
 
 ~1.9 GiB of requests at rest and ~2.5 GiB while the nightly ingest runs, against 4 GiB with the OS and
 k3s inside it. Headroom, but not much: the two things that can spike together are the sidecar holding a
-whole snapshot in memory to upload it and an ingest embedding a batch. metrics-server is disabled in
+whole snapshot in memory to upload it and an ingest embedding a batch. The ingest's half of that was a
+guess until the first nightly run was OOM-killed by it; measured on this host it is ~290Mi with the
+model resident, ~380Mi while embedding and ~480Mi at full catalogue size, where folding a batch into a
+176,000-entry name index adds ~85Mi for half a second (D51). metrics-server is disabled in
 `bootstrap.sh` for the same reason — nothing here autoscales, so it would be ~100Mi spent on a graph.
 
 MinDB's request is what it genuinely reserves at boot — 200,000 × 384 × 4 B for the float32 store plus
@@ -171,18 +174,58 @@ Without the Secret, Traefik serves its self-signed default — a browser warning
 kubectl -n gamerec exec deploy/mindb -c backup -- python -m ops.restore --list
 ```
 
-Seven generations, the newest within a snapshot interval of now. The failure worth watching for is not
-an error in a log — it is this list quietly stopping at an old timestamp, so it is worth looking at
-after any change to the sidecar or its credentials.
+Up to seven generations. The newest is *not* expected to be recent: a generation is written only when
+the vectors actually changed (D52), so on a service whose last ingest was last night the newest
+generation is from last night, and that is correct rather than stalled.
+
+That makes the check a comparison rather than a glance at a clock:
+
+```
+kubectl -n gamerec logs deploy/mindb -c backup --tail=20   # "no new generation" is the idle state
+kubectl -n gamerec get jobs                                # when did an ingest last add anything?
+```
+
+The failure worth watching for is a successful ingest with no generation newer than it. An error in a
+log is not the signal — the sidecar deliberately survives its own failures (D49) — and neither is an
+old timestamp on its own.
 
 A restore is a deliberate, disruptive operation and reads its own instructions:
 [deploy/k8s/manual/restore.yaml](../k8s/manual/restore.yaml).
 
-## What has not been done on a real VM
+## What has and has not been done on the real VM
 
-Everything above is written from the k3d verification in [../k8s/README.md](../k8s/README.md) plus the
-documented behaviour of k3s, certbot and Azure. The manifests, the backup sidecar's code path and the
-restore have all been run; **this script has not yet been run end to end on the Azure VM**, so the
-host-specific steps — the NSG rules, DuckDNS, certbot against a real name — are the parts most likely
-to need a correction on first contact. The script is idempotent so that correcting it is cheap: fix,
-`git pull`, run it again.
+Run on the Azure host on 26 and 27 September 2026, and corrected where it was wrong rather than left
+as written. Done, first-hand:
+
+- `bootstrap.sh` end to end on a fresh Ubuntu 24.04 VM: swap off, k3s pinned and installed, manifests
+  applied, both rollouts green.
+- The images pull and run on x86_64. `/health` reports the `avx2` kernel with `fast_int8`, which is
+  the number benchmarks get labelled with.
+- The backup sidecar taking a real backup with real R2 credentials. It wrote a generation with its
+  COMPLETE marker and sha256 manifest, and `ops.restore --list` read it back.
+- One outage, unplanned and worth more than the rest: a wrong bucket name crash-looped the sidecar,
+  which dropped MinDB out of its Service and took the API down with it. D49 and
+  [../../docs/failure-modes.md](../../docs/failure-modes.md) carry the result.
+- **TLS, issued and serving.** `https://game-rec.duckdns.org/livez` answers 200 behind a Let's Encrypt
+  certificate valid to 26 December 2026. The procedure in the TLS section above is what worked, on the
+  second attempt; the two things that cost the first one are written into it.
+- Stopping and restarting k3s under a live service. Traefik, the API and MinDB all came back without
+  help; the API's restart count went up by one and nothing else noticed.
+- The download half of a restore, against real R2, pointed at a scratch directory rather than the
+  corpus: listing generations, verifying the sha256 of every file in the manifest, writing them
+  snapshot-last. It also turned up D53 — a generation built before any ingest finished carried `{}`
+  where its checkpoint should be, and restoring it reported success.
+
+Not done yet, and not to be read as working:
+
+- **A restore in-cluster**, meaning MinDB booting from a snapshot it did not write. The download half
+  is exercised (above); nothing has yet been restored over `/data` and started. Worth doing with
+  vectors in it rather than while the corpus is empty, since an empty index restores to an empty index
+  and proves little.
+- **The nightly ingest completing.** It has run once, and was OOM-killed embedding its first batch
+  (D51). The corpus on the VM is 199 documents and no vectors.
+- **The initial fill**, and therefore anything about behaviour at 176k games rather than 200.
+- **The plain-HTTP redirect** (D54), which is a manifest away and has only been dry-run.
+- **A deliberate reboot.**
+
+The script is idempotent so that correcting it stays cheap: fix, `git pull`, run it again.

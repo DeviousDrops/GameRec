@@ -94,14 +94,18 @@ about rather than exercised.
 
 ## Deliberately not here yet
 
-- **A hostname.** `50-ingress.yaml` carries `gamerec.example.com`, which matches a Host header that
-  never arrives. Set it before applying; [../vm/README.md](../vm/README.md) has the rest.
+- **A hostname that is yours.** `50-ingress.yaml` carries `game-rec.duckdns.org`, which is this
+  project's host (D46). Anywhere else that is a Host header which never arrives, so change it before
+  applying; [../vm/README.md](../vm/README.md) has the rest.
 - **Anything in the cluster that renews a certificate.** TLS comes from a Secret that certbot writes
   from the host, because cert-manager is an operator and a CRD set to maintain for one certificate on
   one host (D40).
-- **Any verification of the backup sidecar in-cluster.** The backup and restore code paths were
-  exercised against a real S3 endpoint, and the manifests are applied here unchanged, but the sidecar
-  itself has not been watched doing its job on a cluster with real R2 credentials.
+- ~~**Any verification of the backup sidecar in-cluster.**~~ Done, on the VM, with real R2
+  credentials -- and it failed, which is the point of doing it. A wrong bucket name made the sidecar
+  crash-loop, and because a pod is Ready only when every container is ready, that dropped MinDB out
+  of its Service and took the API down with it. The fix is D49 and the story is in
+  [../../docs/failure-modes.md](../../docs/failure-modes.md). A generation now lands in R2 from the
+  cluster; restoring one in-cluster is still only k3d-tested.
 - **More than one node.** The corpus PVC is `ReadWriteOnce`, and the API and ingest share it only
   because every pod lands on the same node. A second node breaks that, and the fix is R2 rather than
   a fight with `ReadWriteMany`.
