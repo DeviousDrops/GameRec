@@ -262,10 +262,10 @@ checkpoint, so for a day the only restorable history was unrestorable.
 Not done yet, and not to be read as working:
 
 - **A restore in-cluster**, meaning MinDB booting from a snapshot it did not write. The download half
-  is exercised (above); nothing has yet been restored over `/data` and started. It is ready to be:
-  `gen-20260928T151651Z` holds 397 real vectors against a COMPLETE checkpoint. The procedure needs
-  MinDB scaled to zero, so it costs the public site a minute or two of 503, and it is much cheaper
-  now at a 791KB snapshot than it will be after the fill.
+  is exercised (above); nothing has yet been restored over `/data` and started. There is now a
+  generation worth restoring — real vectors against a COMPLETE checkpoint — so the remaining
+  question is the write half. The procedure needs MinDB scaled to zero, and it is much cheaper to
+  rehearse at today's corpus size than after the fill.
 - **The nightly ingest completing.** It has run twice and been OOM-killed both times (D51), the second
   time only because the fix was tagged and not deployed. The vectors serving today came from a manual
   reindex, not from an ingest run.
