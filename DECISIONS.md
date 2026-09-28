@@ -926,3 +926,34 @@ that it is impossible. (b) makes the failure visible without making it recoverab
 a correctly declined manual run look like a bug, which is the reason D17 chose exit 0 in the first
 place. (d) trades a whole class of protection for this one case: a short TTL means a slow batch can
 lose its lease to a competitor mid-run. (a) is what happened twice.
+
+### D57 — The popularity scan pages, and renews the lease while it does
+
+**Context:** the initial fill was applied with `--limit 180000` and finished in 33 minutes having
+ingested 1000 games. `fetch_popular` asked SteamSpy for `request=all` with `page: 0` and nothing else,
+and that endpoint answers in fixed pages of 1000 — so the limit was silently clamped to one page, and
+the three-day catalogue fill ADR-0005 describes could not happen. The Job reported `Complete`. This
+project's own research notes had the page size and the paging cost written down (~285 pages at 1
+request per 60 seconds) a phase before the code that ignored them.
+
+**Options:** (a) page up front, collect the whole ordering, then ingest; (b) interleave — fetch a page,
+ingest it, fetch the next; (c) leave it at one page and correct the documents to match.
+
+**Choice:** (a). GameRec re-sorts the ordering by *review count* while SteamSpy orders by *owner
+estimate*, so a sort that has not seen every page is a sort over an arbitrary window — (b) would fill in
+an order that only looks like popularity. Pages are keyed by appid into a dict rather than appended,
+because the catalogue moves under a scan that takes hours and a game that shifts pages would otherwise
+cost a second appdetails request later.
+
+The part that is not optional: SteamSpy gets its own `RateLimiter` at 1/min rather than spending
+Steam's 35/min budget, and `fetch_popular` renews the Ingest Lease once per page. The lease TTL is 30
+minutes and `renew()` was only ever called at a batch boundary, which the scan reaches hours later — so
+without this the lease expires mid-scan and tonight's CronJob steals it and ingests alongside the fill,
+which is the one thing D17 exists to prevent. The scan stops if the renewal fails.
+
+**Trade-off:** a full fill now opens with ~3 hours in which nothing is ingested and the only output is
+one log line a minute. That reads like a hang, so the manifest says so and the scan logs its progress.
+(b) would have started producing vectors immediately and is the better answer if the ordering is ever
+taken from a source that is already globally sorted. (c) is the cheapest and concedes the corpus —
+1000 games is 0.6% of the catalogue, and the popular head is exactly where a recommender's near-misses
+are least forgivable.
