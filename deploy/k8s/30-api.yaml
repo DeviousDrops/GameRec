@@ -41,7 +41,7 @@ spec:
           # Built from deploy/api.Dockerfile. Phase 4's CI publishes this tag; until then it is
           # imported into the local cluster by hand, which is why the pull policy is IfNotPresent
           # rather than Always.
-          image: ghcr.io/deviousdrops/gamerec-api:0.1.0
+          image: ghcr.io/deviousdrops/gamerec-api:0.1.1
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

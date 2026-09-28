@@ -18,7 +18,7 @@ so a host-side number would be measuring a Windows Python install nobody deploys
 
 ```bash
 docker run --rm --network gamerec_default -v "$PWD/bench:/app/bench:ro" -w /app \
-  ghcr.io/deviousdrops/gamerec-api:0.1.0 python -m bench.latency api --url http://api:8000
+  ghcr.io/deviousdrops/gamerec-api:0.1.1 python -m bench.latency api --url http://api:8000
 ```
 
 ## x86_64, kernel avx2
