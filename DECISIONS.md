@@ -729,29 +729,22 @@ second failure wearing a monitoring costume. (c) is the principled fix and stays
 reason in 20-mindb.yaml: the snapshot is on a ReadWriteOnce volume, so a separate pod can only reach
 it by landing on the same node, which is true today and not something to depend on.
 
-### D54 — Plain HTTP redirects, which needs a Traefik CRD
+### D50 — The frontend is static files served by the API
 
-**Context:** verifying TLS on the live VM, `https://game-rec.duckdns.org/livez` returned 200 with a
-valid Let's Encrypt certificate and `http://game-rec.duckdns.org/livez` returned **404**. The
-annotation in `50-ingress.yaml` said "Redirect plain HTTP rather than serving both", and
-`router.entrypoints: websecure` does not redirect anything — it binds the router to 443, leaving port
-80 with no router and Traefik answering with its own 404. The comment described an intention. It
-mattered little while this was an API; it matters now that the API serves a page a person types a
-hostname to reach (D50).
-
-**Options:** (a) correct the comment and keep the 404; (b) a Traefik `Middleware` CRD with
-`redirectScheme`, referenced from the Ingress; (c) `HelmChartConfig` to set Traefik's `web` entrypoint
-to redirect cluster-wide.
-
-**Choice:** (b), as a second Ingress bound to the `web` entrypoint rather than one Ingress bound to
-both. A single router carrying the redirect would also see requests that are already https, and
-whether that is a no-op or a redirect loop depends on how Traefik compares the rewritten URL to the
-original. Two routers cannot loop, and the difference costs one object.
-
-**Trade-off:** this is the one file in the deploy that names its Ingress controller, which is exactly
-what D40 avoided by keeping the Ingress a plain manifest. The mitigation is that it is additive: the
-`gamerec` Ingress is unchanged, so on a cluster without Traefik the TLS router still works and the
-redirect is the only thing missing. It is also a CRD, which AGENTS.md asks be justified — k3s ships
-Traefik and its CRDs, so this adds an object and not a dependency, and no operator is installed.
-(c) redirects for everything on the node through Helm values, which is both broader than this service
-and the Helm layer this project stays out of. (a) is honest and leaves a hostname that 404s.
+**Context:** the service answered only JSON, so using it meant curl or /docs. It needed a page. The
+host is a 2 vCPU / 4 GiB burstable VM already running MinDB, the API, an embedding model in memory
+and a nightly ingest, and the API container is limited to 900Mi (D47).
+**Options:** (a) a second Deployment serving the page -- nginx, or a Node app; (b) a build step in
+this repo producing a bundle the API serves; (c) plain HTML, CSS and JS in web/, copied into the
+existing image and mounted at "/" by the API.
+**Choice:** (c). The page needs a form, a fetch and a list; that is not a framework's worth of
+problem. It ships in the image that already exists, behind the Ingress that already exists, from the
+origin the API already serves, so there is no second rollout, no CORS, no extra memory, and nothing
+to keep up to date but the browser.
+**Trade-off:** no components, no types and no bundler, so the page stays small by discipline rather
+than by tooling -- if it grows past a few hundred lines this decision should be revisited rather than
+worked around. Mounting at "/" also puts a route that matches everything in front of the API's own
+routes, which is safe only because the mount is registered last; tests/test_web.py exists to catch a
+reordering, because the symptom would be every probe 404ing and Kubernetes pulling the pod out of its
+Service. (a) spends a container and a rollout on serving three files. (b) adds a toolchain, and a
+Node build stage in a Python image is a second supply chain for a page with no dependencies.

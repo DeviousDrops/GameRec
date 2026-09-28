@@ -5,8 +5,8 @@ liked — and it returns games from the corpus, with a short explanation of why 
 
 The vector backend is [MinDB](https://github.com/DeviousDrops/mindb), an embedded exact-kNN store
 written in Go: one flat in-memory slab of vectors with an id map, a free list for reuse, and whole-file
-snapshots for durability. GameRec talks to it over FlatBuffers-on-gRPC. Everything runs on a single ARM
-VM under k3s.
+snapshots for durability. GameRec talks to it over FlatBuffers-on-gRPC. Everything runs on a single
+x86_64 VM under k3s: MinDB, the API, the page the API serves, and the nightly ingest.
 
 > ## The rule
 >
@@ -26,7 +26,7 @@ flowchart TB
     U(["user"])
 
     subgraph vm["single VM &middot; k3s &middot; x86_64"]
-        API["Steam-RAG API<br/>FastAPI Deployment<br/>embeds the query in-process<br/>holds names.json in memory"]
+        API["Steam-RAG API<br/>FastAPI Deployment<br/>serves the page at /<br/>embeds the query in-process<br/>holds names.json in memory"]
         SC["backup sidecar"]
         ING["ingest<br/>CronJob 03:17 UTC"]
         MDB[("MinDB<br/>Deployment &middot; Recreate &middot; replicas 1<br/>384-dim &middot; capacity 200k")]
@@ -36,7 +36,7 @@ flowchart TB
     STEAM(["Steam APIs"])
     R2[("Cloudflare R2<br/>source of truth")]
 
-    U -->|"mood query and/or seed game"| API
+    U -->|"the page, then<br/>mood query and/or seed game"| API
     API <-->|"Search &middot; Get"| MDB
     API -->|"narrate"| GROQ
     API -->|"names.json"| PVC[("corpus PVC")]
@@ -128,11 +128,15 @@ decisions that were hard to reverse.
 Requires Docker and Python 3.13. Configuration is environment variables; secrets never live in the repo.
 
 ```bash
-docker compose up                 # MinDB + API locally
+docker compose up                 # MinDB + API locally, page on http://localhost:8000
 python -m ingest.run --limit 200  # fetch, embed and upsert a popularity-ordered slice
 python -m ingest.reindex          # rebuild every vector from documents.jsonl, no Steam requests
 pytest -q                         # unit tests; the codec test needs MinDB up
 ```
+
+The page in `web/` is plain HTML, CSS and JS served by the API itself (D50), so there is no build
+step and no separate dev server: edit a file and reload. It is the same origin as the API, which is
+why it can fetch `/recommend` without any CORS configuration anywhere.
 
 Running it on Kubernetes is [deploy/k8s/README.md](deploy/k8s/README.md): plain manifests, a k3d
 walkthrough, and the list of failure modes that were actually exercised rather than assumed. Putting it
