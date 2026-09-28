@@ -3,10 +3,14 @@
 #
 #   kubectl apply -f deploy/k8s/manual/fill.yaml
 #
-# It runs for about three days at Steam's sustained rate, and the corpus is searchable throughout,
-# because the fill is ordered by popularity -- the games people actually ask for arrive in the first
-# hours. If the pod dies, the run resumes from the checkpoint; if the Job itself needs replacing,
-# delete it and re-apply, which also resumes. Nothing here is a fresh start.
+# It runs for days at Steam's sustained rate, and the corpus is searchable throughout, because the
+# fill is ordered by popularity -- the games people actually ask for arrive in the first hours. If
+# the pod dies, the run resumes from the checkpoint; if the Job itself needs replacing, delete it
+# and re-apply, which also resumes. Nothing here is a fresh start.
+#
+# The first phase is the popularity scan, and at this limit it is 180 SteamSpy pages at a minute
+# each: expect about three hours of `steamspy page N` lines before the first game is fetched (D57).
+# That is not a stall. `--limit 1000` skips it entirely and fills only the popular head.
 apiVersion: batch/v1
 kind: Job
 metadata:
