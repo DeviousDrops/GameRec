@@ -3,6 +3,10 @@
 A RAG-based Steam game recommendation service. Describe what you feel like playing — or name a game you
 liked — and it returns games from the corpus, with a short explanation of why each one fits.
 
+**Running at [game-rec.duckdns.org](https://game-rec.duckdns.org).** One VM, so treat it accordingly.
+The corpus is still filling, and a thin corpus shows: a query only ever returns the best match *it
+has*, so until the fill completes the near-misses win more often than they should.
+
 The vector backend is [MinDB](https://github.com/DeviousDrops/mindb), an embedded exact-kNN store
 written in Go: one flat in-memory slab of vectors with an id map, a free list for reuse, and whole-file
 snapshots for durability. GameRec talks to it over FlatBuffers-on-gRPC. Everything runs on a single
