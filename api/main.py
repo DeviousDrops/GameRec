@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 
 from api.narrate import narrate
+from gamerec import negation
 from gamerec.config import Config
 from gamerec.documents import TEMPLATE_VERSION
 from gamerec.embeddings import MODEL_STAMP, Embedder
@@ -30,6 +31,11 @@ state: dict = {}
 # feels like a pause rather than an outage.
 RETRY_AFTER_SECONDS = 5
 
+# How many candidates to ask MinDB for when a query carries a negation, as a multiple of the page.
+# Hits that look more like the negated span than the wanted one are dropped after the search, and
+# without headroom a page of five could come back as a page of two (D63).
+NEGATION_HEADROOM = 3
+
 
 def _unavailable(error: grpc.RpcError) -> HTTPException:
     """503 with Retry-After, not 500: MinDB restarting is expected, and a 500 reads as a bug."""
@@ -39,6 +45,35 @@ def _unavailable(error: grpc.RpcError) -> HTTPException:
         503, f"MinDB is unavailable ({code}); it may be restarting",
         headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
     )
+
+
+def _negated_out(mindb: MinDBClient, hits: list, query_vector: np.ndarray,
+                 negated_vector: np.ndarray) -> set[str]:
+    """Hit ids that look more like what the user ruled out than like what they asked for.
+
+    Cutting the negated clause out of the query is most of the fix, but it cannot help when what is
+    left implies what was removed: "a soulslike game but not dark souls" leaves "a soulslike game",
+    which ranks Dark Souls first on merit. So every candidate is scored against both directions and
+    dropped when the unwanted one wins.
+
+    Relative, not a threshold: cosines against "dark souls" and against "combat" live on completely
+    different scales, so any fixed cut-off would have to be tuned per query. Asking which of the two
+    the document is closer to needs no tuning, and it stays silent when the negated span is a broad
+    concept that nothing in the corpus resembles especially closely -- measured, it fires on the
+    Souls titles for "a soulslike game" and on nothing at all for "a relaxing farming game" (D63).
+    """
+    vectors = mindb.get([hit.id for hit in hits])
+    dropped = set()
+    for hit in hits:
+        vector = vectors.get(hit.id)
+        if vector is None:
+            # MinDB knows the id -- it just returned it -- so this is a delete between the two
+            # calls. Keeping the hit is the safe way to be wrong.
+            continue
+        vector = vector / np.linalg.norm(vector)
+        if float(vector @ negated_vector) > float(vector @ query_vector):
+            dropped.add(hit.id)
+    return dropped
 
 
 def _names() -> NameIndex:
@@ -145,8 +180,14 @@ def recommend(
     embedder, mindb, names = state["embedder"], state["mindb"], _names()
 
     query_vector, seed_entry, exclude = None, None, set()
+    negated_vector, parsed = None, None
     if q:
-        query_vector = embedder.embed_query(q)
+        # The model has no representation for "not", so the negation is taken out of the text before
+        # it ever reaches the model, and turned into a direction to push results away from (D63).
+        parsed = negation.split(q)
+        query_vector = embedder.embed_query(parsed.wanted)
+        if parsed.negated:
+            negated_vector = embedder.embed_query(parsed.negated)
     if seed:
         resolution = names.resolve(seed)
         if not resolution.usable:
@@ -169,8 +210,12 @@ def recommend(
             blend = config.mood_weight * query_vector + (1 - config.mood_weight) * seed_vector
             query_vector = blend / np.linalg.norm(blend)
 
+    want = top_k + len(exclude)
     try:
-        hits = mindb.search(query_vector, top_k + len(exclude))
+        hits = mindb.search(query_vector, want * NEGATION_HEADROOM if negated_vector is not None
+                            else want)
+        if negated_vector is not None:
+            exclude |= _negated_out(mindb, hits, query_vector, negated_vector)
     except grpc.RpcError as error:
         raise _unavailable(error) from error
     results = []
@@ -194,6 +239,9 @@ def recommend(
 
     response = {
         "query": q,
+        # What the negation was read as, so a query that comes back short or surprising can be
+        # explained without guessing -- same reason template_version is per result (D22).
+        "negated": parsed.negated if parsed else None,
         "seed": {"appid": seed_entry.appid, "name": seed_entry.name} if seed_entry else None,
         "results": results,
         "narration": None,
