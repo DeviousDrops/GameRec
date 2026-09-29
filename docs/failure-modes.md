@@ -242,7 +242,10 @@ backup is chosen to keep it (ADR-0002).
 
 ## Groq is down, slow, or out of quota
 
-*Exercised: no API key configured, and a key with a wrong model name.*
+*Exercised: no API key configured, and a key with a wrong model name -- and then for real, in
+production, on 2026-09-29. `GROQ_MODEL` named a model Groq had decommissioned, the endpoint answered
+404, and narration had been absent from every response for as long as the key had been installed.
+Nothing was broken and nothing reported anything: this is the failure-open path working as designed.*
 
 ```
 symptom     recommendations come back with no narration; the results themselves are unchanged
@@ -253,6 +256,19 @@ recovery    none needed; ?narrate=false skips it entirely
 Narration is the only part of the system with an external dependency at request time, and the only
 part that is decoration (D6). It fails open by construction -- and it is why the tables in
 `bench/README.md` are measured with narration off.
+
+The thing to know about that trade is that a dead narration and a working one look identical from
+outside unless you ask for narration and read the field. There is no alarm to add that would be worth
+it, so the check is manual and belongs in whatever gets run after a deploy:
+
+```
+curl -s "https://<host>/recommend?q=cozy+farming&narrate=true" | jq -r .narration
+```
+
+`null` means it is off, failing, or pointed at a model that no longer exists; the pod log says which
+(`narration unavailable: ...`, or `narration came back empty ...` if the model reasoned through its
+whole reply budget). Model ids expire without notice, so ask the account what it has rather than
+trusting the value in the ConfigMap -- the command is in `deploy/k8s/10-config.yaml` (D62).
 
 ## The disk fills
 
