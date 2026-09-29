@@ -1010,3 +1010,41 @@ than the script — a loud failure in the right direction. (a) is the smaller di
 WAL check is one of three things standing between a bad rollout and a green deploy, and an option that
 quietly removes it is not a fix. (c) is the correct answer for an API with consumers it does not
 control, and this endpoint has exactly one.
+
+### D60
+
+**Context:** the first in-cluster restore that actually wrote anything (2026-09-29, after D58 fixed the
+permission that stopped the one before it) reported success in six seconds, and MinDB then refused to
+start: `write-ahead log does not belong to this snapshot: snapshot expects run <a>, log carries <b>`.
+A generation holds the snapshot, its `.meta` and the checkpoint, and deliberately never holds the log —
+the log is the tail of one particular run, and there is no sense in which a run's log can be replayed
+onto a different snapshot. So a restore always leaves the replaced snapshot's log beside the new one,
+and MinDB always refuses. Nothing was wrong with the restore's own work; the service stayed down for
+eight minutes on a file that was 32 bytes of header with no records in it.
+
+**Options:** (a) leave it to the runbook — one more line in the procedure telling the operator to delete
+the log; (b) have `ops.restore` delete every `<snapshot>.wal.??????` after writing the snapshot;
+(c) rename them aside instead of deleting; (d) include the log in the generation and restore it with
+everything else.
+
+**Choice:** (c). The restore is the thing that knows it has just invalidated the log, so it is the thing
+that should deal with it — `retire_wal` renames each segment to `orphaned-<name>`, which no longer
+matches the glob MinDB discovers segments with, and logs a warning naming both paths. It runs last, after
+the snapshot is written: dying between the two leaves MinDB refusing to boot, which is loud and fixable
+by hand, where the other order would retire the log of a snapshot that is still the live one.
+
+**Consequence worth stating:** once MinDB is crash-looping on a mismatched log, nothing in the pod can
+clear it. The `mindb` container never gets far enough to be exec'd into, and the backup sidecar mounts
+`/data` read-only on purpose (it only ever reads the snapshot), so the obvious hand-fix returns
+`Read-only file system`. The recovery is the node's filesystem or a corrected restore. That is a second
+argument for the fix living in `ops.restore`: it is the only component that holds a writable `/data` and
+is not MinDB.
+
+**Trade-off:** rename over delete costs disk on a volume that is already the whole VM's disk, and leaves
+files nothing ever cleans up. Worth it, because the case this protects is restoring an *older* generation
+over a live volume, where the log holds the only copy of everything written since — and a restore is the
+one moment where the operator's mental model is most likely to be wrong. (a) is what the last two weeks
+already were, and the runbook said nothing about the log because nobody knew; a procedure that is only
+correct when the operator remembers an undocumented step is not a procedure. (d) is wrong at the
+foundations: it would pair a log with a snapshot from a different run in the backup rather than on the
+disk, which is the same mismatch moved somewhere harder to see.

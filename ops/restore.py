@@ -110,9 +110,41 @@ def _write(path: Path, body: bytes) -> None:
     os.replace(tmp, path)
 
 
+def retire_wal(snapshot_path: Path) -> list[Path]:
+    """Move any write-ahead log beside the snapshot out of MinDB's way, and say so.
+
+    A log belongs to the snapshot run that wrote it. MinDB keeps that run id in the `.meta` and
+    refuses to boot when the log carries a different one -- which is precisely the state a restore
+    leaves behind, a restored snapshot sitting beside the replaced snapshot's log:
+
+        mindb: write-ahead log does not belong to this snapshot: snapshot expects run <a>,
+        log carries <b>
+
+    A generation never contains a log (ops.backup), so there is nothing to restore over it and the
+    old one cannot be replayed onto the new snapshot. Without this the restore reports success and
+    MinDB crash-loops, which is how the first in-cluster restore looked (D60).
+
+    Renamed, not deleted: a log holds the writes made since the snapshot it belongs to, and restoring
+    an *older* generation over a live volume is exactly the case where those are the only copy. MinDB
+    globs `<snapshot>.wal.??????`, so a renamed segment is invisible to it and still on the disk.
+
+    Called last, after the snapshot is written. Dying between the two leaves MinDB refusing to boot:
+    loud, and fixable by hand. The other order retires the log of a snapshot that is still the real
+    one, which loses those writes quietly.
+    """
+    retired = []
+    for segment in sorted(snapshot_path.parent.glob(snapshot_path.name + ".wal.??????")):
+        aside = segment.with_name("orphaned-" + segment.name)
+        os.replace(segment, aside)
+        log.warning("moved %s aside as %s: it belongs to the snapshot that was just replaced, and "
+                    "MinDB will not boot beside it", segment.name, aside.name)
+        retired.append(aside)
+    return retired
+
+
 def write_files(files: dict[str, bytes], snapshot_path: Path, checkpoint_path: Path,
                 force: bool = False) -> None:
-    """Put a verified generation on disk, snapshot last.
+    """Put a verified generation on disk, snapshot last, then retire the log it replaced.
 
     Snapshot last for the same reason the ingest checkpoints before snapshotting: if this dies
     halfway, the result is a checkpoint with no snapshot, which reads as "nothing is loaded" and is
@@ -140,6 +172,11 @@ def write_files(files: dict[str, bytes], snapshot_path: Path, checkpoint_path: P
         # Survivable, and worth saying out loud: MinDB warns and writes a fresh one at the next
         # snapshot, having been unable to check the WAL against what it loaded.
         log.warning("this generation has no .meta sidecar; MinDB will regenerate one")
+
+    if "mindb.snap" in files:
+        # Only when the snapshot actually changed: a log that still matches what MinDB will load is
+        # the tail of the live index and replaying it is the whole point of having it.
+        retire_wal(snapshot_path)
 
 
 def main() -> int:
