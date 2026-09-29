@@ -14,6 +14,10 @@ _Avoid_: record, entry, chunk, blurb, doc
 A free-text description of the experience someone is after, as opposed to a named example of it.
 _Avoid_: prompt, search string, question, query text
 
+**Negated Span**:
+The part of a Mood Query naming something the request wants kept away from, cut out of the text before it is embedded because the embedding model has no representation for "not". A Mood Query carries at most one.
+_Avoid_: exclusion, negative query, filter, blacklist
+
 **Seed Game**:
 A game offered as an example of what someone wants more of. A request may carry a Mood Query, a Seed Game, or both.
 _Avoid_: anchor, reference game, source game, similar-to
