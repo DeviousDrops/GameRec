@@ -41,7 +41,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: fill
-          image: ghcr.io/deviousdrops/gamerec-api:0.1.5
+          image: ghcr.io/deviousdrops/gamerec-api:0.1.6
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "ingest.run"]
           # The whole catalogue. SteamSpy orders it by owner estimates, which is used for ordering
