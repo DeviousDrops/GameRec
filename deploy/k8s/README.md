@@ -49,8 +49,8 @@ the Secret example should never overwrite a real key.
 ```bash
 k3d cluster create gamerec --agents 0
 
-docker build -t ghcr.io/deviousdrops/gamerec-api:0.1.5 -f deploy/api.Dockerfile .
-k3d image import ghcr.io/deviousdrops/gamerec-api:0.1.5 -c gamerec   # or pull a released tag
+docker build -t ghcr.io/deviousdrops/gamerec-api:0.1.6 -f deploy/api.Dockerfile .
+k3d image import ghcr.io/deviousdrops/gamerec-api:0.1.6 -c gamerec   # or pull a released tag
 
 kubectl apply -f deploy/k8s/
 kubectl -n gamerec rollout status deploy/mindb
