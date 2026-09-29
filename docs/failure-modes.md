@@ -33,13 +33,16 @@ measured in seconds. That is the trade the 503 and the `Retry-After` exist to pa
 
 ## MinDB's snapshot is gone or corrupt
 
-*Exercised on k3d: restored a generation over a volume and booted MinDB from it -- `loaded=200`, WAL
-checked against the restored `.meta`. Attempted in the cluster on 2026-09-28 and it failed: the Job
-runs as 65532 and the checkpoint on the PVC belongs to the ingest's 10001, so the write was refused
-(D58). Nothing was lost -- the checkpoint is written before the snapshot exactly so that dying there
-is the recoverable half -- but MinDB was down for seven minutes rather than the ninety seconds the
-procedure implies, and the API needed `kubectl rollout restart deploy/gamerec-api` to come back.
-Treat the write half as unproven in the cluster until it has run there once.*
+*Exercised in the cluster on 2026-09-29, at the third attempt. The write half works now and the
+procedure in `restore.yaml` is the one that was run: MinDB scaled to 0, the newest generation restored
+over the volume in six seconds, MinDB scaled back. Two attempts failed first, and both failures were in
+the restore rather than in MinDB: the Job runs as 65532 and the checkpoint belongs to the ingest's
+10001, so the write was refused (D58); then the write succeeded and MinDB crash-looped on the previous
+run's write-ahead log, which a generation does not contain and the restore did not retire (D60). Neither
+lost anything -- the checkpoint is written before the snapshot exactly so that dying there is the
+recoverable half -- and both cost downtime the ninety-second procedure does not imply: seven minutes,
+then eight. Budget ten minutes, not ninety seconds, and expect the API to need
+`kubectl rollout restart deploy/gamerec-api` if MinDB was away long enough.*
 
 ```
 symptom     MinDB boots with vector_count 0; /health shows corpus_size 0
@@ -59,6 +62,13 @@ Two recoveries, and which one to reach for depends on what else survived:
 Restoring is minutes and reindexing is hours, so restore first when there is a good generation. The
 header of `deploy/k8s/manual/restore.yaml` has the exact sequence; MinDB must be scaled to 0 first,
 because it writes its own snapshot over the top every `-snapshot-interval`.
+
+One thing to look for in the restore's own log, because it is the part that was missing: a line reading
+`moved mindb.snap.wal.NNNNNN aside as orphaned-...`. The log belongs to the run that wrote the snapshot
+being replaced, MinDB checks the run id in the `.meta` against it and refuses to boot on a mismatch, and
+the retired file is left on the volume rather than deleted (D60). Nothing cleans those up; they are the
+only copy of whatever the replaced snapshot had not yet written, so read them off the volume before
+removing them if the restore turned out to be a mistake.
 
 ## A backup generation is incomplete or corrupt
 

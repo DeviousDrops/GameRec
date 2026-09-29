@@ -458,3 +458,56 @@ def test_a_restore_leaves_no_temporary_files_behind(store, tmp_path):
                         restored / "checkpoint.json")
 
     assert not list(restored.glob("*.tmp"))
+
+
+def test_a_restore_retires_the_log_that_belonged_to_the_snapshot_it_replaced(store, tmp_path):
+    """The restore that looked like a success and wasn't (D60): MinDB checks the log's run id against
+    the snapshot's and crash-loops on a mismatch, so leaving the old log beside a new snapshot means
+    the service never comes back."""
+    config, snapshot_path = prepare(tmp_path / "live", data=b"the vectors")
+    prefix = backup.back_up_once(store, config, snapshot_path)
+
+    restored = tmp_path / "restored"
+    restored.mkdir()
+    stale = restored / "mindb.snap.wal.003631"
+    stale.write_bytes(b"MINDBWAL\x01\x00\x00\x00" + b"the previous run's log")
+
+    restore.write_files(restore.fetch_generation(store, prefix), restored / "mindb.snap",
+                        restored / "checkpoint.json", force=True)
+
+    # MinDB globs `<snapshot>.wal.??????`; nothing may still match, or it refuses to boot.
+    assert not list(restored.glob("mindb.snap.wal.??????"))
+    # And the bytes survive, because an older generation restored over a live volume leaves the log
+    # holding the only copy of everything written since.
+    assert (restored / "orphaned-mindb.snap.wal.003631").read_bytes().endswith(b"log")
+
+
+def test_every_log_segment_is_retired_not_just_the_first(store, tmp_path):
+    """MinDB rotates, so there can be several. One left behind is the same crash-loop as all of them."""
+    config, snapshot_path = prepare(tmp_path / "live", data=b"the vectors")
+    prefix = backup.back_up_once(store, config, snapshot_path)
+
+    restored = tmp_path / "restored"
+    restored.mkdir()
+    for number in (1, 2, 3):
+        (restored / f"mindb.snap.wal.{number:06d}").write_bytes(b"segment")
+
+    restore.write_files(restore.fetch_generation(store, prefix), restored / "mindb.snap",
+                        restored / "checkpoint.json", force=True)
+
+    assert not list(restored.glob("mindb.snap.wal.??????"))
+    assert len(list(restored.glob("orphaned-mindb.snap.wal.*"))) == 3
+
+
+def test_a_generation_without_a_snapshot_leaves_the_log_alone(tmp_path):
+    """The log is the tail of the snapshot MinDB is about to load. Retiring it when the snapshot has
+    not been replaced throws away live writes for nothing."""
+    restored = tmp_path / "restored"
+    restored.mkdir()
+    live = restored / "mindb.snap.wal.000001"
+    live.write_bytes(b"writes since the last snapshot")
+
+    restore.write_files({"checkpoint.json": b'{"model_stamp": "m"}'},
+                        restored / "mindb.snap", restored / "checkpoint.json")
+
+    assert live.exists()
