@@ -22,6 +22,8 @@ metadata:
     # redirects to here rather than serving anything: the API is read-only and the corpus is public
     # Steam data, so this is about not training anyone to ignore the scheme, not about secrecy.
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # Order matters and is the order written: refuse the excess first, then cap what gets through.
+    traefik.ingress.kubernetes.io/router.middlewares: gamerec-api-rate-limit@kubernetescrd,gamerec-api-in-flight@kubernetescrd
 spec:
   tls:
     - hosts:
@@ -96,3 +98,50 @@ spec:
                 name: gamerec-api
                 port:
                   number: 8000
+
+---
+# Rate limiting, because this router is the entire distance between the public internet and a shared
+# 2 vCPU VM, and the URL is meant to be handed out (D61).
+#
+# The numbers come from bench/README.md rather than from taste. `/recommend?q=` measures p50 7.6 ms
+# and p95 15.2 ms with narration off, so 10 requests a second is roughly 8% of one core -- small
+# enough to leave the fill's embedding and MinDB's own CPU alone, and far above anything a person
+# clicking a link produces. The burst is what a page firing several queries at once needs, and it
+# refills at `average` per `period`.
+#
+# What this does NOT do on this cluster is limit per client. Traefik keys on the address it sees, the
+# k3s Traefik Service is `externalTrafficPolicy: Cluster`, and that SNATs the client address at the
+# node -- so every external request most likely arrives wearing the same one and the limit is global.
+# Unverified: confirming it means turning on Traefik's access log and reading `ClientAddr`, and
+# per-client limiting would mean changing a Service this repo deliberately does not own (D40). Global
+# is the honest description and is still the useful half: it bounds what one scraper can cost.
+#
+# inFlightReq is the one that matters with narration on. A narrated request waits on Groq for seconds
+# while holding a worker, so concurrency, not rate, is what exhausts the process.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-rate-limit
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/part-of: gamerec
+spec:
+  rateLimit:
+    average: 10
+    period: 1s
+    burst: 40
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-in-flight
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/part-of: gamerec
+spec:
+  inFlightReq:
+    # uvicorn runs one process here, and every handler is a plain `def`, so FastAPI serves them on its
+    # threadpool -- concurrency is bounded by that and by 2 vCPU, not by a worker count. 10 is above
+    # what the CPU can usefully overlap on purpose: a little queueing beats a 429 for a request that
+    # would have been served in 8 ms.
+    amount: 10

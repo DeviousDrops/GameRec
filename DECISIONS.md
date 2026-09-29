@@ -1048,3 +1048,33 @@ already were, and the runbook said nothing about the log because nobody knew; a 
 correct when the operator remembers an undocumented step is not a procedure. (d) is wrong at the
 foundations: it would pair a log with a snapshot from a different run in the backup rather than on the
 disk, which is the same mismatch moved somewhere harder to see.
+
+### D61
+
+**Context:** the service is on a public URL meant to be handed to people, in front of a shared 2 vCPU
+VM that is also running MinDB, a nightly ingest and a multi-day fill. Nothing bounded what one client
+could ask for. `/recommend?q=` embeds the query with ONNX on the same CPUs the fill is using, and with
+`?narrate=true` it holds a worker open across a Groq call measured in seconds. The API is read-only and
+the data is public Steam data, so this is not about access control -- it is about one scraper being able
+to take the box away from everyone else, including from the fill.
+
+**Options:** (a) nothing, and rely on nobody finding it; (b) a request-rate limit at the Ingress;
+(c) an in-flight concurrency cap at the Ingress; (d) both; (e) limits inside the API, in middleware of
+its own.
+
+**Choice:** (d), as two Traefik `Middleware` objects on the https router -- `rateLimit` at 10 requests a
+second with a burst of 40, and `inFlightReq` at 10. The numbers come from `bench/README.md`: `/recommend?q=`
+measures p50 7.6 ms, so 10/s is about 8% of one core, orders of magnitude above a person clicking a link
+and far below anything that would starve the fill. The two catch different failures -- rate catches a
+scraper, concurrency catches narrated requests piling up on an external dependency -- and neither
+subsumes the other.
+
+**Trade-off:** on this cluster the limit is **global, not per client**, and that is a real weakening. Traefik
+keys on the address it sees; the k3s Traefik Service is `externalTrafficPolicy: Cluster`, which SNATs the
+client address at the node, so every external request most likely arrives wearing the same one. That is
+recorded as unverified rather than asserted: confirming it means enabling Traefik's access log and reading
+`ClientAddr`. Fixing it properly means changing a `kube-system` Service this repo deliberately does not
+own (D40), which is a bigger decision than this one and is not worth making to improve a limit nobody has
+yet hit. Global still bounds the total cost of abuse, which was the point. (e) would put the limit
+downstream of TLS termination and inside the process being protected -- the requests still arrive, still
+get parsed, and still occupy the loop; at the Ingress they are refused before they reach Python.
