@@ -46,7 +46,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: ingest
-              image: ghcr.io/deviousdrops/gamerec-api:0.1.3
+              image: ghcr.io/deviousdrops/gamerec-api:0.1.4
               imagePullPolicy: IfNotPresent
               command: ["python", "-m", "ingest.run"]
               # 2,000 candidates a night: enough to absorb new releases and a share of refreshes,
