@@ -127,7 +127,10 @@ function render(body) {
   }
 
   const seed = body.seed ? ` like ${body.seed.name}` : "";
-  setStatus(`${body.results.length} result${body.results.length === 1 ? "" : "s"}${seed}.`);
+  // Said out loud, because a negated query silently drops results and the count alone would look
+  // like a thin corpus rather than a request being honoured (D63).
+  const without = body.negated ? `, keeping clear of ${body.negated}` : "";
+  setStatus(`${body.results.length} result${body.results.length === 1 ? "" : "s"}${seed}${without}.`);
 }
 
 async function ask(url, attempt = 0) {
