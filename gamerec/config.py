@@ -21,7 +21,9 @@ class Config:
     # operator nothing they cannot get from inside the cluster.
     health_detail: bool = os.environ.get("HEALTH_DETAIL", "false").lower() == "true"
     groq_api_key: str = os.environ.get("GROQ_API_KEY", "")
-    groq_model: str = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    # llama-3.3-70b-versatile until 2026-09-29, when it turned out to have been decommissioned:
+    # the endpoint answers 404, narration fails open, and nothing anywhere said so (D62).
+    groq_model: str = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
 
     # Ingest pacing. 35/min against Steam's ~40/min refill is the measured default from D17 --
     # deliberately under the ceiling, because the penalty for guessing high is a 429 that costs a

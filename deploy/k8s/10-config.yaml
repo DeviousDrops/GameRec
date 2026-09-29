@@ -13,7 +13,12 @@ data:
   TOP_K: "5"
   MOOD_WEIGHT: "0.6"
   REVIEW_FLOOR: "50"
-  GROQ_MODEL: "llama-3.3-70b-versatile"
+  # Groq decommissions models and the endpoint answers 404 for a name it no longer serves. Narration
+  # fails open, so the only symptom is recommendations quietly arriving without any (D62). Check
+  # against the account's own list rather than the docs:
+  #   kubectl -n gamerec exec deploy/gamerec-api -- python -c 'import os,httpx;print([m["id"] for m in
+  #     httpx.get("https://api.groq.com/openai/v1/models", headers={"Authorization":"Bearer "+os.environ["GROQ_API_KEY"]}).json()["data"]])'
+  GROQ_MODEL: "openai/gpt-oss-20b"
 
   # Whether /health names the stack -- kernel, architecture, capacity, model -- on top of saying
   # whether it works. Off, because this API answers the open internet and that block is a free

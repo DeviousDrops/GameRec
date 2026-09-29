@@ -1078,3 +1078,35 @@ own (D40), which is a bigger decision than this one and is not worth making to i
 yet hit. Global still bounds the total cost of abuse, which was the point. (e) would put the limit
 downstream of TLS termination and inside the process being protected -- the requests still arrive, still
 get parsed, and still occupy the loop; at the Ingress they are refused before they reach Python.
+
+### D62
+
+**Context:** narration has been dead in production and nothing said so. `GROQ_MODEL` was
+`llama-3.3-70b-versatile`, which Groq has decommissioned; the endpoint answers 404 for a name it no
+longer serves. `narrate` caught it, logged one `narration unavailable: Client error '404 Not Found'`,
+and returned None, which is exactly what D6 asks for -- so every response since has been correct,
+narration-free, and indistinguishable from a response to `?narrate=false`. It was found by curling
+`?narrate=true` while checking whether the key was set, not by anything in the system noticing.
+
+Asking the account which models it can actually use turned up 11, none of them a `llama-3.3`, and all
+the chat-capable ones reasoning models. That is the second half of the problem: a reasoning model spends
+part of the *completion* budget thinking before any of it reaches the reply, so `max_tokens: 400` with
+five games to describe returned `content: ""` and `finish_reason: "length"` -- a 200 with nothing in it,
+which the old code passed through `.strip()` and returned as the empty string.
+
+**Options:** (a) change `GROQ_MODEL` in the ConfigMap and stop there; (b) also ask for
+`reasoning_effort: "low"` so the budget goes on the reply; (c) raise `max_tokens` instead;
+(d) fail loudly when narration is unavailable, so this cannot go unnoticed again.
+
+**Choice:** (a) and (b), plus treating an empty reply as no narration rather than as narration. The
+model default moves to `openai/gpt-oss-20b` -- measured at 780 ms with low effort against 870 ms
+without, and 21 reasoning tokens against 140. A model that rejects the parameter gets one retry without
+it, because an unknown parameter fails the whole request and narration failing open would make that look
+like a model with nothing to say. `api/narrate.py` also gets its first tests: it had none, which is the
+actual reason this ran broken for as long as it did.
+
+**Trade-off:** (d) is tempting and wrong. Narration is a garnish on a read-only retrieval service (D6),
+and a 502 because Groq is having a bad afternoon would be the tail wagging the dog. The cost of keeping
+it silent is exactly what happened here, and the honest mitigation is not louder failure but the ability
+to tell the two apart from outside -- which `?narrate=true` already gives, for free, to anyone who
+thinks to ask. (c) treats the symptom: a bigger budget still ends up on reasoning, just later.
