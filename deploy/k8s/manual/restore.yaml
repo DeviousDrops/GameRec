@@ -56,7 +56,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: restore
-          image: ghcr.io/deviousdrops/gamerec-api:0.1.3
+          image: ghcr.io/deviousdrops/gamerec-api:0.1.4
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "ops.restore"]
           args: ["--snapshot=/data/mindb.snap", "--force"]
