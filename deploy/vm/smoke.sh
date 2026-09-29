@@ -47,6 +47,14 @@ flag = lambda value: str(value).lower()  # as /health reported it, not as Python
 # The stack detail is absent unless HEALTH_DETAIL is set, which it is not in production (D56). Every
 # check below works either way; only the printing gets shorter.
 mindb = health.get("mindb", {})
+# wal_healthy moved to the top level in the same change, so this script has to read both shapes: the
+# run that matters most is the one deploying D56 itself, and at that moment the service answering is
+# still the version before it. A smoke test that only understands the new shape fails that rollout
+# with a KeyError and blames the deploy (D59).
+if "wal_healthy" in health:
+    wal_healthy = health["wal_healthy"]
+else:
+    wal_healthy = mindb.get("wal_healthy") if mindb.get("wal_enabled") else None
 capacity = f" of {health['capacity']}" if "capacity" in health else ""
 print(f"corpus      {health['corpus_size']}{capacity} vectors, {health['dims']} dims")
 print(f"names       {health['name_index_size']}")
@@ -56,7 +64,7 @@ if mindb:
     print(f"mindb       kernel={mindb['kernel']} goarch={mindb['goarch']} "
           f"fast_int8={flag(mindb['fast_int8'])} wal_healthy={flag(mindb['wal_healthy'])}")
 else:
-    print(f"mindb       wal_healthy={flag(health['wal_healthy'])} (detail withheld)")
+    print(f"mindb       wal_healthy={flag(wal_healthy)} (detail withheld)")
 
 problems = []
 # An empty index answers every query with nothing and looks healthy doing it, which is exactly the
@@ -65,8 +73,8 @@ if health["corpus_size"] == 0:
     problems.append("the index is empty: restore a generation or run ingest.reindex")
 if health["dims"] != 384:
     problems.append(f"MinDB is {health['dims']}-dimensional, the model produces 384")
-# wal_healthy is None when MinDB has no WAL, and False only when it has a broken one.
-if health["wal_healthy"] is False:
+# None when MinDB has no WAL, and False only when it has a broken one.
+if wal_healthy is False:
     problems.append("MinDB reports an unhealthy WAL")
 if problems:
     print("\n".join(f"FAIL: {p}" for p in problems), file=sys.stderr)

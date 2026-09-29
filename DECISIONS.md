@@ -957,3 +957,29 @@ one log line a minute. That reads like a hang, so the manifest says so and the s
 taken from a source that is already globally sorted. (c) is the cheapest and concedes the corpus —
 1000 games is 0.6% of the catalogue, and the popular head is exactly where a recommender's near-misses
 are least forgivable.
+
+### D59 — The smoke test reads both shapes of /health, and is tested against both
+
+**Context:** D56 moved `wal_healthy` to the top level of `/health` and put the rest behind a flag.
+`smoke.sh` was updated to match, and the first rollout it ran against was the one deploying D56 — at
+which point the service answering was still the version before it, the key was not there, and the
+script exited 1 on a `KeyError`. It failed the deploy it was verifying, for a WAL that was healthy. The
+same change had been reviewed, merged and reasoned about specifically to avoid failing a deploy for the
+wrong reason, and this is the mechanism it missed: a smoke test runs at the one moment the two versions
+disagree, so it is the only script here that has to understand both of them.
+
+**Options:** (a) `health.get("wal_healthy")`, which turns a missing key into `None` and silently stops
+checking the WAL; (b) read the top level and fall back to `mindb.wal_healthy`; (c) version the endpoint
+and have the script select on it.
+
+**Choice:** (b), and — the part that matters more than the fix — a test that reads the parser out of
+`smoke.sh` and runs it against a real response from before D56, one from after, and one with the detail
+enabled. The script is extracted rather than reimplemented, because a reimplementation here would pass
+while the thing that actually runs in production stayed broken. The three shapes are recorded as
+literals taken from live responses.
+
+**Trade-off:** the test knows how the heredoc is delimited, so moving that block breaks the test rather
+than the script — a loud failure in the right direction. (a) is the smaller diff and the worse one: the
+WAL check is one of three things standing between a bad rollout and a green deploy, and an option that
+quietly removes it is not a fix. (c) is the correct answer for an API with consumers it does not
+control, and this endpoint has exactly one.
