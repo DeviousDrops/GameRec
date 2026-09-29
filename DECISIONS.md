@@ -1164,3 +1164,39 @@ phrase requests as exclusions constantly.
 This is mitigation, not a fix. A cue list is a list, so `"cozy farming, no combat"` still goes through
 unhandled, and nothing here gives the model an understanding of negation it does not have. The fix for
 that is a cross-encoder rerank, which is a different service and a different latency budget.
+
+### D64
+
+**Context:** the page reported "The service is not answering /health." while `/livez`, `/readyz` and
+`/health` all answered 200 in under half a second. The banner rendered
+`${body.mindb.kernel}`, and `/health` withholds everything under `mindb` unless `HEALTH_DETAIL` is set
+-- which it is not in the deployment that serves the page (D56). So the fetch succeeded, the render
+threw a `TypeError`, and it landed in the same bare `catch` as a failed request. The service was
+healthy the whole time and the page describing it said otherwise, from the moment D56 shipped until
+somebody happened to look.
+
+**Options:** (a) publish `mindb` on the public `/health` again so the page can read it; (b) drop the
+kernel from the banner; (c) read it optionally and render it when it happens to be there; (d) leave
+the catch as it is and just fix the field.
+
+**Choice:** (c) for the field, plus narrowing the `try` to cover only the fetch. The kernel is flavour
+worth keeping for an internal deployment with detail on, and `body.mindb?.kernel` costs one character.
+Narrowing the catch is the part that matters: everything after the response is parsed is this file's
+own doing, and reporting a bug in the page as an outage in the service sends whoever reads it to the
+wrong component. It cost this project a diagnosis that started at the wrong end.
+
+`tests/test_web.py` now asserts that every field the banner reads unguarded off `/health` is present
+in the public response, with the endpoint itself as the source of truth rather than a hardcoded list.
+A guarded read is allowed by design, which is the difference between "show it if this deployment
+publishes it" and the bug.
+
+**Trade-off:** (a) would undo D56 for the convenience of one line of cosmetics, on an endpoint facing
+the open internet. (b) is the smaller change and loses something real: on an internal deployment the
+kernel is the fastest way to see which SIMD path MinDB picked. (d) fixes this instance and leaves the
+mechanism that hid it, which is the actual defect -- the page had one error message for two unrelated
+failures, and it named the one that was not happening.
+
+The general lesson is worth stating because it will recur: narrowing what an endpoint publishes breaks
+whoever was reading the part that went away, silently, and the first report blames the service. Nothing
+in CI could have caught it, because nothing in CI loads the page against a response shaped the way
+production shapes it -- which is why the new test compares the two directly.

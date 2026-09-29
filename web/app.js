@@ -31,23 +31,33 @@ function sleep(seconds) {
 }
 
 async function showCorpusSize() {
+  // Only the fetch is guarded. Anything after it is this file's own doing, and reporting a bug here
+  // as "the service is not answering" sends whoever reads it to the wrong component -- which is
+  // exactly what happened: the line below used to read body.mindb.kernel unconditionally.
+  let body;
   try {
     const response = await fetch("/health");
     if (!response.ok) throw new Error(String(response.status));
-    const body = await response.json();
-    if (body.corpus_size === 0) {
-      corpus.dataset.state = "empty";
-      corpus.textContent =
-        "The corpus is empty — nothing has been ingested yet, so every query returns nothing.";
-      return;
-    }
-    corpus.dataset.state = "ready";
-    corpus.textContent =
-      `${body.corpus_size.toLocaleString()} games indexed · ${body.mindb.kernel} kernel`;
+    body = await response.json();
   } catch {
     corpus.dataset.state = "down";
     corpus.textContent = "The service is not answering /health.";
+    return;
   }
+
+  if (body.corpus_size === 0) {
+    corpus.dataset.state = "empty";
+    corpus.textContent =
+      "The corpus is empty — nothing has been ingested yet, so every query returns nothing.";
+    return;
+  }
+  corpus.dataset.state = "ready";
+  // /health withholds everything under `mindb` unless HEALTH_DETAIL is set, and on the public
+  // internet it never is (D56). The kernel is flavour for an internal deployment; the corpus size
+  // is the reason this line exists, so it must not depend on the flavour being there.
+  const kernel = body.mindb?.kernel;
+  const suffix = kernel ? ` · ${kernel} kernel` : "";
+  corpus.textContent = `${body.corpus_size.toLocaleString()} games indexed${suffix}`;
 }
 
 function card(hit, topScore) {

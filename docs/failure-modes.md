@@ -270,6 +270,35 @@ curl -s "https://<host>/recommend?q=cozy+farming&narrate=true" | jq -r .narratio
 whole reply budget). Model ids expire without notice, so ask the account what it has rather than
 trusting the value in the ConfigMap -- the command is in `deploy/k8s/10-config.yaml` (D62).
 
+## The page says the service is not answering /health
+
+*Exercised for real on 2026-09-29, reported by a user looking at the site while every probe answered
+200. The service was fine. The page was wrong about it.*
+
+```
+symptom     the banner reads "The service is not answering /health."; curl of /health returns 200
+behaviour   the banner's fetch succeeded and rendering it threw; the bare catch reported an outage
+recovery    none on the service side -- the bug is in web/app.js
+```
+
+The first move is to stop trusting the banner and ask the endpoint:
+
+```
+curl -s "https://<host>/health"      # 200 with a body means the service is answering
+```
+
+If that returns 200, the page is reading a field the response does not carry. `/health` publishes a
+small body to the open internet and withholds everything under `mindb` unless `HEALTH_DETAIL` is set
+(D56), so anything the banner reads out of that block is absent in production -- and a `TypeError`
+in the render path used to land in the same `catch` as a failed fetch, which is what turned a
+cosmetic bug into a reported outage. The catch now covers only the fetch, and
+`tests/test_web.py::test_the_banner_only_reads_health_fields_the_public_endpoint_returns` fails if a
+new unguarded read appears (D64).
+
+The general shape of this one outlives the specific bug: tightening what an endpoint publishes
+silently breaks whoever was reading the part that went away, and the first report will name the wrong
+component.
+
 ## The disk fills
 
 *Reasoned, not exercised.*

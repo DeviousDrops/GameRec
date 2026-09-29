@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import dataclasses
 
+import re
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -65,6 +68,29 @@ def test_recommend_still_answers_json(client):
 
     assert response.status_code == 200
     assert response.json()["results"] == []
+
+
+def test_the_banner_only_reads_health_fields_the_public_endpoint_returns(client):
+    """The bug this catches, which shipped and went unnoticed: the banner read `body.mindb.kernel`,
+    /health withholds everything under `mindb` unless HEALTH_DETAIL is set (D56), and the resulting
+    TypeError landed in a bare catch that said "The service is not answering /health." A healthy
+    service was reported as down by the page describing it, for as long as nobody looked.
+
+    HEALTH_DETAIL is false here because it is false in the deployment that serves this page. Only
+    unguarded reads count: `body.mindb?.kernel` is a deliberate "show it if this deployment
+    publishes it", and `body.mindb.kernel` is the bug.
+    """
+    public = set(client.get("/health").json())
+    source = (Path(main.__file__).resolve().parent.parent / "web" / "app.js").read_text()
+    start = source.index("async function showCorpusSize()")
+    end = source.index("function card(", start)
+    # Comments are stripped first: this file's own prose names the field that used to be the bug.
+    code = re.sub(r"//.*", "", source[start:end])
+    read = set(re.findall(r"body[.](\w+)(?![\w?])", code))
+
+    assert read, "the banner stopped reading /health; this test is now checking nothing"
+    assert read <= public, (
+        f"the banner reads {sorted(read - public)} off /health, which the public response withholds")
 
 
 def test_an_unknown_path_is_still_a_miss(client):
