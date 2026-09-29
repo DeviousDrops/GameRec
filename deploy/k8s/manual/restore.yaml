@@ -39,7 +39,10 @@ spec:
       securityContext:
         runAsNonRoot: true
         # 65532, not 10001: these files are MinDB's, and it writes them 0600. Restoring them as
-        # anything else leaves a snapshot MinDB cannot read.
+        # anything else leaves a snapshot MinDB cannot read. The other half of the write lands in
+        # /corpus, which belongs to the ingest's 10001 -- ops.restore replaces that file rather than
+        # opening it, which is what a world-writable directory permits, and states 0644 so the next
+        # ingest can still read it (D58).
         runAsUser: 65532
         runAsGroup: 65532
         fsGroup: 65532

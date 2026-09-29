@@ -927,7 +927,34 @@ a correctly declined manual run look like a bug, which is the reason D17 chose e
 place. (d) trades a whole class of protection for this one case: a short TTL means a slow batch can
 lose its lease to a competitor mid-run. (a) is what happened twice.
 
-### D57 — The popularity scan pages, and renews the lease while it does
+### D57 — A restore replaces the files it writes rather than overwriting them
+
+**Context:** the first in-cluster restore failed with `PermissionError: [Errno 13] Permission denied:
+'/corpus/checkpoint.json'`, seven minutes into a window I had predicted at ninety seconds. The Job runs
+as 65532 so that the snapshot it writes is owned by the process that loads it (D47); the checkpoint it
+also writes lives in `/corpus`, which the ingest owns as 10001 at 0644. `write_bytes` opens the existing
+file, and 65532 may not. Nothing was lost — the checkpoint is written before the snapshot precisely so
+that dying here is the recoverable half — but the restore path had never run against a corpus that
+already had a checkpoint, which is why every local and k3d test passed: `/corpus` is world-writable, so
+*creating* the file works and only *replacing* it does not.
+
+**Options:** (a) an initContainer as 10001 for the checkpoint and the main container as 65532 for the
+snapshot; (b) `fsGroup: 10001` so the process is a member of the ingest's group; (c) write through a
+temporary file and rename, which is what the ingest already does.
+
+**Choice:** (c), with the mode stated as 0644 rather than inherited. A rename asks the *directory* for
+permission, and `/corpus` is world-writable with no sticky bit, so this works at any uid and stops the
+manifest from encoding a uid relationship it would then have to maintain. The explicit mode is the
+other half of the same bug in mirror image: a checkpoint left at a default 0600 by 65532 is unreadable
+to the 10001 that resumes from it, so the next nightly would start from nothing on a full corpus — a
+worse failure than this one, and silent.
+
+**Trade-off:** it makes the three writes atomic, which a file whose whole purpose is to be trusted
+should have been from the start, and it costs a temporary file's worth of space next to each target.
+(a) needs the generation downloaded twice or handed between containers, and splits one verified write
+across two security contexts for no gain. (b) is pod-wide, so it would also re-group MinDB's own data
+volume as a side effect of restoring — fixing a permission problem by widening a different one.
+### D58 — The popularity scan pages, and renews the lease while it does
 
 **Context:** the initial fill was applied with `--limit 180000` and finished in 33 minutes having
 ingested 1000 games. `fetch_popular` asked SteamSpy for `request=all` with `page: 0` and nothing else,
