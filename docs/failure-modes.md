@@ -12,7 +12,19 @@ costs days of Steam requests.
 ## MinDB is down or restarting
 
 *Exercised on k3d with `mindb` scaled to zero, and locally with `docker stop`. Both API pods stayed
-up with zero restarts, and scaling MinDB back restored every vector from its PVC.*
+up with zero restarts, and scaling MinDB back restored every vector from its PVC. Exercised again in
+the cluster on 2026-09-29, unintentionally and for much longer: MinDB crash-looped for two and a half
+hours on the log a restore left behind (D60), and the API pod stayed `Running` with zero restarts
+throughout, `0/1` and out of its Service, answering 503 on `/readyz` and `/recommend`. Twenty minutes
+in, the restart count was still 0 -- the liveness probe deliberately not touching MinDB is what that
+measures, and this is the longest it has been measured over.*
+
+One half of this is still unproven in the cluster: whether *the same* API pod goes Ready again on its
+own once MinDB returns. It did on k3d, and the code has no reconnect logic to get wrong -- the channel
+is lazy and `/readyz` is a live call -- but on the real cluster the API has been rolled as part of the
+fix every time MinDB has come back, so nothing here has watched an untouched pod recover. Bouncing
+MinDB to find out is two minutes of 503s and worth doing; it is not worth doing while an initial fill
+is in its popularity scan, because MinDB is what the fill writes to when the scan ends.
 
 ```
 symptom     /recommend -> 503, body "MinDB is unavailable (unavailable)", Retry-After: 5
