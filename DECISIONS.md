@@ -1110,3 +1110,57 @@ and a 502 because Groq is having a bad afternoon would be the tail wagging the d
 it silent is exactly what happened here, and the honest mitigation is not louder failure but the ability
 to tell the two apart from outside -- which `?narrate=true` already gives, for free, to anyone who
 thinks to ask. (c) treats the symptom: a bigger budget still ends up on reasoning, just later.
+
+### D63
+
+**Context:** `"a open world boss fight game which is nothing like dark souls"` returned four Dark Souls
+titles in its top five, reported against the live service. The cause is not a bug in the query path --
+it is what the query path is. `embed_query` hands the whole sentence to a bi-encoder, and a bi-encoder
+has no representation for "not": the content words *dark*, *souls*, *boss* dominate the vector and
+*nothing like* is a function phrase that barely moves it. The same sentence with "exactly like" embeds
+to almost the same point. Measured on the 200-game dev corpus, which reproduces the live ranking to the
+third decimal (0.685, 0.676 for the two titles both corpora hold):
+
+```
+query as shipped                          positive span only ("a open world boss fight game")
+0.685  DARK SOULS II: Scholar ...         0.696  MultiVersus
+0.676  DARK SOULS III                     0.686  Counter-Strike
+0.676  Darkest Dungeon                    0.679  Brawlhalla
+0.653  Path of Exile                      0.675  Warframe
+0.651  No Man's Sky                       0.672  Far Cry 5
+                                          0.671  Monster Hunter: World
+```
+
+**Options:** (a) rewrite the query with the LLM into a positive one plus an exclusion list; (b) cut the
+negated clause out of the text and embed only what is left; (c) embed both halves and search on
+`wanted - λ·negated`; (d) keep the ranking and drop hits that are closer to the negated span than to
+the wanted one; (e) leave it, and document that negation is unsupported.
+
+**Choice:** (b) and (d), in that order, both in the query path and neither touching the LLM. (b) is
+what does the work -- the right-hand column above is a better answer set by any reading, and it costs
+one regex. (d) exists for the case (b) cannot reach: when what is left implies what was removed. "a
+soulslike game but not dark souls" leaves "a soulslike game", which ranks Dark Souls first *on merit*,
+and only a second signal can catch that. It is relative rather than a threshold because cosines against
+"dark souls" and against "combat" live on different scales, so any cut-off would need tuning per query;
+asking which of the two directions a document is nearer needs none. Measured, it drops the three Souls
+titles for "a soulslike game" and fires on nothing at all in the top ten of "a relaxing farming game" --
+and on a five-game slice it correctly drops Monster Hunter for "a relaxing farming game without combat".
+Negated queries fetch `3 × k` candidates so a filtered page still fills, and pay one extra `Get` for the
+hit vectors; a query without a negation takes exactly the path it always did, which a test asserts.
+
+The cue list carries no bare "no" or "nothing": `"no man's sky like games"` is a real query, and a split
+that would leave either side empty is refused rather than guessed at. `/recommend` reports what the
+negation was read as, and the frontend says it in the status line -- a negated query returns fewer
+results than it asked for, and without that line the count reads as a thin corpus.
+
+**Trade-off:** (a) is the one that would actually understand the sentence, and it is ruled out by D6:
+retrieval must not depend on the LLM, because the LLM is optional and fails open. Narration going quiet
+degrades a response; query rewriting going quiet would change what the service *finds*, silently and
+only sometimes. (c) was measured and is worse than (b): at λ=0.3 it tracks (b) with a little drift, and
+by λ=0.5 the results are battle royales -- subtracting "dark souls" removes "open world" along with it,
+because the two are not orthogonal in this space. (e) is honest but the query is not exotic; users
+phrase requests as exclusions constantly.
+
+This is mitigation, not a fix. A cue list is a list, so `"cozy farming, no combat"` still goes through
+unhandled, and nothing here gives the model an understanding of negation it does not have. The fix for
+that is a cross-encoder rerank, which is a different service and a different latency budget.
