@@ -1033,6 +1033,13 @@ matches the glob MinDB discovers segments with, and logs a warning naming both p
 the snapshot is written: dying between the two leaves MinDB refusing to boot, which is loud and fixable
 by hand, where the other order would retire the log of a snapshot that is still the live one.
 
+**Consequence worth stating:** once MinDB is crash-looping on a mismatched log, nothing in the pod can
+clear it. The `mindb` container never gets far enough to be exec'd into, and the backup sidecar mounts
+`/data` read-only on purpose (it only ever reads the snapshot), so the obvious hand-fix returns
+`Read-only file system`. The recovery is the node's filesystem or a corrected restore. That is a second
+argument for the fix living in `ops.restore`: it is the only component that holds a writable `/data` and
+is not MinDB.
+
 **Trade-off:** rename over delete costs disk on a volume that is already the whole VM's disk, and leaves
 files nothing ever cleans up. Worth it, because the case this protects is restoring an *older* generation
 over a live volume, where the log holds the only copy of everything written since — and a restore is the

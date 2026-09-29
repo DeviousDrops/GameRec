@@ -70,6 +70,16 @@ the retired file is left on the volume rather than deleted (D60). Nothing cleans
 only copy of whatever the replaced snapshot had not yet written, so read them off the volume before
 removing them if the restore turned out to be a mistake.
 
+If MinDB is already crash-looping on a log an older restore left behind, there is no way to fix it from
+inside the pod: the `mindb` container cannot start, and the backup sidecar mounts `/data` read-only by
+design, so `exec ... mv` answers `Read-only file system`. Either re-run the restore on an image that
+retires the log, or move the file on the node -- the claim is local-path storage:
+
+```
+sudo mv /var/lib/rancher/k3s/storage/pvc-*_gamerec_mindb-data/mindb.snap.wal.??????         /var/lib/rancher/k3s/storage/pvc-*_gamerec_mindb-data/orphaned-wal.bak
+sudo kubectl -n gamerec delete pod -l app.kubernetes.io/name=mindb
+```
+
 ## A backup generation is incomplete or corrupt
 
 *Exercised against a real S3 endpoint (moto): a generation with the COMPLETE marker removed, and a
