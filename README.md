@@ -74,6 +74,11 @@ reason — "*<name>* is known, but it has too few reviews to be indexed" beats a
 offers the names it probably meant ("did you mean *Stardew Valley*?") rather than guessing one.
 ([ADR-0004](docs/adr/0004-name-resolution-is-lexical.md))
 
+**Owned games can be left out.** `/recommend?user=<id>` asks
+[library-service](services/library-service/README.md) — a small Spring Boot service with its own
+Postgres — which games that user owns, with a 300 ms timeout, and drops them from the results. If it
+does not answer, the results go out unfiltered and `library_filtered` in the response says so (D67).
+
 ## Status
 
 **Live, and complete as designed.** See [DECISIONS.md](DECISIONS.md) for the reasoning
