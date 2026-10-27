@@ -74,9 +74,39 @@ def test_roman_numerals_count_as_sequel_markers(index):
 
 def test_a_long_subtitle_falls_below_the_threshold(index):
     """Documented limitation, not an accident: "DARK SOULS 2" scores 86.1 against the full title.
-    Lowering the threshold would start matching different games, so the appid is the way in."""
-    assert index.resolve("DARK SOULS 2").entry is None
+    Lowering the threshold would start matching different games, so the appid is the way in --
+    and the miss names the game it probably meant, so the person can type it."""
+    resolution = index.resolve("DARK SOULS 2")
+    assert resolution.entry is None
+    assert resolution.suggestions[0] == "DARK SOULS II: Scholar of the First Sin"
     assert index.resolve(335300).entry.appid == 335300
+
+
+def test_a_typo_below_the_threshold_suggests_rather_than_guesses():
+    index = NameIndex(ENTRIES + [NameEntry(413150, "Stardew Valley", IN_CORPUS)])
+    resolution = index.resolve("stardw valy")
+    assert resolution.entry is None
+    assert "did you mean Stardew Valley?" in resolution.reason
+
+
+def test_a_name_without_a_number_lists_the_sequels_instead_of_picking_one():
+    index = NameIndex([NameEntry(374320, "DARK SOULS III", IN_CORPUS),
+                       NameEntry(335300, "DARK SOULS II: Scholar of the First Sin", IN_CORPUS)])
+    resolution = index.resolve("dark souls")
+    assert resolution.entry is None
+    assert set(resolution.suggestions) == {"DARK SOULS III", "DARK SOULS II: Scholar of the First Sin"}
+
+
+def test_a_suggestion_is_never_a_game_that_cannot_be_recommended(index):
+    """Frostpunk is known and filtered; suggesting it would answer one 404 with another."""
+    assert "Frostpunk" not in index.resolve("frostpnk").suggestions
+
+
+def test_a_nonexistent_sequel_is_not_offered_its_neighbours_as_corrections(index):
+    """D26: Half-Life 3 is not a typo of Half-Life, and "did you mean Half-Life" would imply it."""
+    resolution = index.resolve("Half-Life 3")
+    assert resolution.suggestions == []
+    assert "not the same game" in resolution.reason
 
 
 @pytest.mark.parametrize(
