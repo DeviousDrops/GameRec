@@ -30,6 +30,10 @@ _Avoid_: result, hit, match, suggestion
 The prose explaining why the Recommendations fit the request. It describes the ranking; it never decides it.
 _Avoid_: explanation, summary, blurb, commentary, reasoning
 
+**Library**:
+The games one person owns or has wishlisted. Owned games are left out of that person's Recommendations, since recommending a game someone already has tells them nothing.
+_Avoid_: collection, inventory, account, profile
+
 **Name Index**:
 The published mapping from game names to appids and their standing in the Corpus. It answers "which game did they mean", a lexical question that similarity between Game Documents cannot answer.
 _Avoid_: lookup table, alias map, name cache

@@ -11,6 +11,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 
+from api.library import owned_appids
 from api.narrate import narrate
 from gamerec import negation
 from gamerec.config import Config
@@ -172,6 +173,8 @@ def recommend(
     seed: str | None = Query(None, description="a game name or a raw Steam appid"),
     k: int | None = Query(None, ge=1, le=50),
     narrate_results: bool = Query(True, alias="narrate"),
+    user: str | None = Query(None, max_length=64,
+                             description="leave out games this user owns, per library-service"),
 ) -> dict:
     if not q and not seed:
         raise HTTPException(400, "give a mood query, a seed game, or both")
@@ -210,6 +213,15 @@ def recommend(
             blend = config.mood_weight * query_vector + (1 - config.mood_weight) * seed_vector
             query_vector = blend / np.linalg.norm(blend)
 
+    # Games the user already owns are excluded exactly like the seed is. None means library-service
+    # could not answer, and the recommendations go out unfiltered rather than not at all (D67).
+    library_filtered = None
+    if user and config.library_url:
+        owned = owned_appids(user, config.library_url)
+        library_filtered = owned is not None
+        exclude |= {f"appid:{appid}" for appid in owned or ()}
+
+    # One extra candidate per excluded id, so a page still fills after they are dropped.
     want = top_k + len(exclude)
     try:
         hits = mindb.search(query_vector, want * NEGATION_HEADROOM if negated_vector is not None
@@ -243,6 +255,9 @@ def recommend(
         # explained without guessing -- same reason template_version is per result (D22).
         "negated": parsed.negated if parsed else None,
         "seed": {"appid": seed_entry.appid, "name": seed_entry.name} if seed_entry else None,
+        # True when owned games were left out, False when library-service failed and they were not,
+        # None when no user was given. A filter that fails open is otherwise invisible (D62, D67).
+        "library_filtered": library_filtered,
         "results": results,
         "narration": None,
     }
