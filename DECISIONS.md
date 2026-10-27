@@ -1255,3 +1255,37 @@ D65 the cursor would reset too. The lease makes a reindex refuse to start while 
 which is a two-hour wait on a bad night; that is the correct answer, since the alternative is a
 checkpoint stamped by whichever process wrote last. `manual/reindex.yaml` now mounts the Secret so the
 lease is reachable from the cluster at all.
+
+## Services
+
+### D67 — Owned games come from library-service, a separate Spring Boot service, and fail open
+
+**Context:** GameRec recommends games without knowing which ones a person already owns, so a "more
+like Hollow Knight" for someone with a full library is half games they have. Leaving those out needs a
+per-user record of ownership, which is the first piece of state in this project that belongs to a
+user rather than to Steam -- and so the first that is not reproducible from R2.
+**Options:** (a) a `library` table inside the Python API, with SQLite on the corpus volume; (b) a
+separate service with its own Postgres, called over HTTP; (c) ask the Steam Web API for owned games at
+query time.
+**Choice:** (b): `services/library-service`, Spring Boot 3 on Java 21, Postgres 17 in a StatefulSet.
+The recommender calls `GET /api/v1/users/{user}/library/ids?status=OWNED` with a 300 ms timeout when
+`/recommend` carries a `user` and `LIBRARY_URL` is set, adds the ids to the same exclusion set the seed
+game uses, and over-fetches by that many so the page still fills. Any failure -- timeout, refusal, a
+non-200, a body of the wrong shape -- returns the results unfiltered and logs a warning, and the
+response carries `library_filtered: true | false | null` so a filter that has quietly stopped working
+is visible from outside, which is the lesson of D62.
+**Trade-off:** (b) is a second language, a second database and ~770 Mi of requests on a 4 GiB VM that
+D47 already trimmed to one API replica, for one table. The case for it is that this data is the
+opposite of everything else here: written by users rather than an ingest, not derivable from Steam,
+and needing real transactions and a unique constraint rather than an append-only file. It also must not
+share a failure domain with retrieval -- the recommender keeps working with library-service down,
+which (a) could not offer once the table and the queries share a process. (c) needs each user's Steam
+key or OAuth, a public profile, and a call to Steam inside a latency budget of milliseconds.
+
+D13's rule is about MinDB and still holds: nothing becomes MinDB-only. Library data is Postgres-only,
+and it is **not backed up** -- the local-path volume is as durable as the node's disk. That is fine
+while it holds test users and is the first thing to fix before it holds real ones. The 300 ms is per
+phase in httpx, so connect-then-read can approach 600 ms; the measured failure cases came back in
+~300 ms. The call uses one long-lived client, because building an httpx client per call was measured at
+~190 ms -- most of the budget spent before the request left. The service is not deployed to the VM by
+this change, and `LIBRARY_URL` ships empty.
