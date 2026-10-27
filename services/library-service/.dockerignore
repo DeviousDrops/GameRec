@@ -1,0 +1,9 @@
+# The image is built from pom.xml and src/ only. Everything else is kept out of the build context,
+# target/ above all: a stale local jar must never be what ends up in an image.
+target/
+k8s/
+.mvn/
+mvnw
+mvnw.cmd
+docker-compose.yml
+*.md
