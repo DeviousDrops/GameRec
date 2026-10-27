@@ -17,6 +17,12 @@ spring:
     # Off: no lazy loading during JSON rendering, so every query runs inside the service layer.
     open-in-view: false
 
+  # Flyway makes the first connection at boot. When the service and Postgres start together, as on a
+  # fresh deploy, the database may not be accepting connections yet; retrying with backoff (1s, 2s,
+  # 4s, 8s, 16s) waits for it instead of crashing and being restarted by Kubernetes.
+  flyway:
+    connect-retries: 5
+
 server:
   port: 8080
   # Finish in-flight requests on SIGTERM instead of dropping them, which is what a rolling update sends.
