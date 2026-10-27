@@ -4,8 +4,8 @@ A RAG-based Steam game recommendation service. Describe what you feel like playi
 liked — and it returns games from the corpus, with a short explanation of why each one fits.
 
 **Running at [game-rec.duckdns.org](https://game-rec.duckdns.org).** One VM, so treat it accordingly.
-The corpus is still filling, and a thin corpus shows: a query only ever returns the best match *it
-has*, so until the fill completes the near-misses win more often than they should.
+The corpus holds about 30,500 games -- every app SteamSpy lists that is a game with at least 50
+reviews -- and the nightly ingest adds new releases as they cross that line.
 
 The vector backend is [MinDB](https://github.com/DeviousDrops/mindb), an embedded exact-kNN store
 written in Go: one flat in-memory slab of vectors with an id map, a free list for reuse, and whole-file
@@ -70,12 +70,13 @@ by ingest and loaded into memory at startup) mapping every appid Steam knows abo
 status: `in_corpus`, `filtered_low_reviews`, `not_a_game`, or `pending_ingest`. Matching is rapidfuzz at
 a ≥90 score, and a raw appid bypasses fuzzy matching entirely. Because the index covers the whole
 catalogue rather than just what was indexed, a seed that isn't available comes back with the exact
-reason — "*Half-Life 3* hasn't been ingested yet" beats a bare "not found".
+reason — "*<name>* is known, but it has too few reviews to be indexed" beats a bare "not found" — and a near miss
+offers the names it probably meant ("did you mean *Stardew Valley*?") rather than guessing one.
 ([ADR-0004](docs/adr/0004-name-resolution-is-lexical.md))
 
 ## Status
 
-**Phase 6 — going live on a real VM.** See [DECISIONS.md](DECISIONS.md) for the reasoning
+**Live, and complete as designed.** See [DECISIONS.md](DECISIONS.md) for the reasoning
 behind every non-obvious choice, [CONTEXT.md](CONTEXT.md) for the vocabulary, and [docs/adr/](docs/adr/) for the
 decisions that were hard to reverse.
 
@@ -87,18 +88,19 @@ decisions that were hard to reverse.
 | 3 · Containerise + k8s | done — plain manifests, verified end to end on k3d |
 | 4 · CI + VM deploy | done — CI, R2 backups and a verified restore, k3s bootstrap |
 | 5 · Polish | done — labelled benchmarks, a failure-mode runbook, a post-deploy smoke test |
-| 6 · Live | in progress — bringing up the Azure VM, first deploy with real R2 credentials (D46) |
+| 6 · Live | done — Azure VM, TLS, R2 backups, a verified in-cluster restore, the initial fill, and a nightly ingest that finds new games (D46, D65) |
 
 ## Things worth knowing up front
 
-- **The corpus is smaller than the catalogue.** Steam lists ~176,900 appids; that is the number *before*
-  filtering. The corpus is everything with `type == "game"` above a configurable review floor (starting
-  at 50), which drops demos, DLC, soundtracks, videos and the long tail of games nobody has reviewed —
-  so the indexed count is materially lower. MinDB is provisioned at 200,000 vectors anyway, because its
-  capacity is fixed at startup and growing it means a restart.
-- **The corpus starts partial.** A full initial fill takes about three days at Steam's sustained rate of
-  ~208 requests per 5 minutes, and metadata cannot be batched. The fill is resumable and ordered by
-  popularity, so the most-wanted games are searchable within hours.
+- **The corpus is much smaller than the catalogue.** Steam's store lists ~177,000 games. The ordering
+  comes from SteamSpy, whose list ends at 82,506 apps; of those, 51,850 have fewer than 50 reviews and
+  147 are not games, which leaves ~30,500. The review floor is `REVIEW_FLOOR` and is the dial: lowering
+  it makes the next nightly fetch every filtered game that now clears it. MinDB is provisioned at
+  200,000 vectors anyway, because its capacity is fixed at startup and growing it means a restart.
+- **The corpus started partial.** The initial fill took 17 hours at ~35 requests a minute, because
+  metadata cannot be batched; it is resumable and ordered by popularity, so the most-wanted games were
+  searchable within the first hour. From then on the nightly scans the whole list, fetches what is new
+  or newly over the floor, and refreshes 500 existing games in rotation (D65).
   ([ADR-0005](docs/adr/0005-initial-fill-is-resumable-and-the-corpus-starts-partial.md))
 - **Single instance means visible downtime.** MinDB deploys with the `Recreate` strategy; the API
   returns `503` with `Retry-After` while it restarts. Its volume is `ReadWriteOnce`, so a rolling

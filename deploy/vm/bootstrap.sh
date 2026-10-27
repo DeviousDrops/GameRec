@@ -61,14 +61,12 @@ if ! kubectl -n "${NAMESPACE}" get secret gamerec-secrets >/dev/null 2>&1; then
     # narration and takes no backups, all of which look like success.
     cat <<'EOF'
 
-  No gamerec-secrets yet. Nothing will start until it exists:
-
-    kubectl -n gamerec create secret generic gamerec-secrets \
-      --from-literal=GROQ_API_KEY=... \
-      --from-literal=R2_ACCESS_KEY_ID=... \
-      --from-literal=R2_SECRET_ACCESS_KEY=...
-
-  Then set R2_ENDPOINT in deploy/k8s/10-config.yaml and re-run this script.
+  No gamerec-secrets yet. The API will answer without narration and nothing
+  will be backed up until it exists. Create it with the four keys -- GROQ_API_KEY,
+  R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_ENDPOINT, which lives in the
+  Secret and not the ConfigMap (D48) -- following the read -rsp recipe at the
+  top of deploy/k8s/manual/secret.template.yaml, which keeps the values out of
+  argv and shell history. Then re-run this script.
 EOF
 fi
 

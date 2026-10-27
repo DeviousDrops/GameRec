@@ -14,8 +14,8 @@ spec:
   schedule: "17 3 * * *"
   timeZone: "Etc/UTC"
   # Forbid, because pacing is per-process (D17): two runs would each stay under the rate limit and
-  # jointly sail past it. This is half of the guard. The other half is the Ingest Lease, which covers
-  # a manual run started beside the CronJob; it needs object storage, so it lands with R2 in Phase 4.
+  # jointly sail past it. This is half of the guard. The other half is the Ingest Lease in R2, which
+  # covers a manual run, the fill or a reindex started beside the CronJob (D17, D20).
   concurrencyPolicy: Forbid
   # A missed window is not worth catching up on: the next run picks up from the checkpoint anyway.
   startingDeadlineSeconds: 3600

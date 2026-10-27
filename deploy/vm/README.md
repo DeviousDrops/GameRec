@@ -123,7 +123,8 @@ sudo ./deploy/vm/bootstrap.sh
 
 Nothing is echoed as you type and history keeps the variable names, not their values. `R2_ENDPOINT`
 is in the Secret rather than the ConfigMap (D48). Leaving it unset anywhere is a supported state
-that means "no lease and no backups", which the sidecar says loudly by crash-looping. Check the four
+that means "no lease and no backups", which the sidecar says in its log every interval rather than
+by crash-looping, because a crash-looping sidecar takes MinDB out of its Service (D49). Check the four
 keys landed without printing any of them:
 
 ```
@@ -131,8 +132,8 @@ kubectl -n gamerec get secret gamerec-secrets \
   -o go-template='{{range $k,$v := .data}}{{$k}}{{"\t"}}{{len $v}}{{"\n"}}{{end}}'
 ```
 
-Then the initial fill, which takes hours at 35 requests a minute (D17) and is resumable, so a
-disconnected ssh session costs nothing:
+Then the initial fill, which took 17 hours the first time at 35 requests a minute (D17) and is
+resumable, so a disconnected ssh session costs nothing:
 
 ```
 kubectl -n gamerec apply -f deploy/k8s/manual/fill.yaml
@@ -262,17 +263,22 @@ because retention caps the count and a write prunes the oldest in the same breat
 newest *name*. And the seven generations sitting in R2 before this all carried `{}` as their
 checkpoint, so for a day the only restorable history was unrestorable.
 
+Done since, on 29 September 2026 and after:
+
+- **A restore in-cluster**, MinDB booting from a snapshot it did not write. It took three attempts,
+  and both failures were the restore's own: a checkpoint it could not overwrite (D58), then a
+  write-ahead log it left behind that MinDB refused to boot beside (D60).
+- **The initial fill**, in 17 hours: SteamSpy's list ends at 82,506 apps, of which 51,850 are under
+  the review floor and 147 are not games, leaving the 30,509 the service holds. That is the Scope
+  Filter's answer, not a fill that stopped early (D65).
+- **The nightly ingest completing**, every night from then on -- and adding nothing, for a month,
+  because it only ever looked at the 2,000 most-reviewed games. D65 is that fix and
+  [../../docs/failure-modes.md](../../docs/failure-modes.md) has the one-line check for it.
+
 Not done yet, and not to be read as working:
 
-- **A restore in-cluster**, meaning MinDB booting from a snapshot it did not write. The download half
-  is exercised (above); nothing has yet been restored over `/data` and started. There is now a
-  generation worth restoring — real vectors against a COMPLETE checkpoint — so the remaining
-  question is the write half. The procedure needs MinDB scaled to zero, and it is much cheaper to
-  rehearse at today's corpus size than after the fill.
-- **The nightly ingest completing.** It has run twice and been OOM-killed both times (D51), the second
-  time only because the fix was tagged and not deployed. The vectors serving today came from a manual
-  reindex, not from an ingest run.
-- **The initial fill**, and therefore anything about behaviour at 176k games rather than 397.
 - **A deliberate reboot.**
+- **The same API pod recovering on its own after MinDB returns.** Every time MinDB has come back on
+  this VM the API was rolled as part of the fix, so this is k3d-verified only.
 
 The script is idempotent so that correcting it stays cheap: fix, `git pull`, run it again.

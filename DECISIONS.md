@@ -870,33 +870,7 @@ Traefik and its CRDs, so this adds an object and not a dependency, and no operat
 (c) redirects for everything on the node through Helm values, which is both broader than this service
 and the Helm layer this project stays out of. (a) is honest and leaves a hostname that 404s.
 
-### D55 — /health says whether it works; what it is built from is behind a flag
-
-**Context:** the API is reachable from the internet at a hostname a person types, and `/health` was
-answering everybody with `capacity`, `model_stamp`, `template_version` and MinDB's `kernel`, `goarch`
-and `fast_int8`. That is a free fingerprint — exact model, exact index capacity, the CPU feature the
-vector store compiled against — handed to anyone who asks, for the benefit of an operator who can
-already read all of it from inside the cluster. It is not a secret: this repo is public and every one
-of those values is in it. It is that an unauthenticated endpoint is a bad place to keep a manifest.
-
-**Options:** (a) leave it; the repo is public anyway. (b) drop the detail entirely. (c) split it:
-liveness-grade facts always, stack detail only when `HEALTH_DETAIL` is set. (d) require a token on
-`/health`.
-
-**Choice:** (c), defaulting off. `status`, `corpus_size`, `dims`, `name_index_size` and `wal_healthy`
-stay unconditional, because those five are what `smoke.sh` fails a deploy on — an empty index, a
-dimension mismatch, a broken WAL — and a smoke test that cannot check those is not a smoke test. The
-rest merges in only behind the flag.
-
-**Trade-off:** `bench.latency` labels every run with the kernel it read from `/health` (D23,
-ADR-0006), and against the default it now has nothing to read. It refuses to run rather than printing
-`kernel=None`, which means benchmarking the live service takes a config change and a rollout. That is
-the right friction: an unlabelled latency number is the easiest dishonest thing in this project, and
-ADR-0006 exists because of it. (b) would have cost the same without leaving a way back. (d) adds the
-first credential in a service whose access control is deliberately reachability (D8), to protect data
-that is on GitHub. (a) is defensible and still wrong: `corpus_size` is the only field on that endpoint
-a stranger has any use for.
-### D56 — A lease in our own name is a dead predecessor, not a competitor
+### D55 — A lease in our own name is a dead predecessor, not a competitor
 
 **Context:** the nightly ingest of 2026-09-28 was OOM-killed mid-embed, restarted in place under
 `restartPolicy: OnFailure`, read the lease its own dead attempt had written 24 minutes earlier, and
@@ -927,34 +901,34 @@ a correctly declined manual run look like a bug, which is the reason D17 chose e
 place. (d) trades a whole class of protection for this one case: a short TTL means a slow batch can
 lose its lease to a competitor mid-run. (a) is what happened twice.
 
-### D57 — A restore replaces the files it writes rather than overwriting them
+### D56 — /health says whether it works; what it is built from is behind a flag
 
-**Context:** the first in-cluster restore failed with `PermissionError: [Errno 13] Permission denied:
-'/corpus/checkpoint.json'`, seven minutes into a window I had predicted at ninety seconds. The Job runs
-as 65532 so that the snapshot it writes is owned by the process that loads it (D47); the checkpoint it
-also writes lives in `/corpus`, which the ingest owns as 10001 at 0644. `write_bytes` opens the existing
-file, and 65532 may not. Nothing was lost — the checkpoint is written before the snapshot precisely so
-that dying here is the recoverable half — but the restore path had never run against a corpus that
-already had a checkpoint, which is why every local and k3d test passed: `/corpus` is world-writable, so
-*creating* the file works and only *replacing* it does not.
+**Context:** the API is reachable from the internet at a hostname a person types, and `/health` was
+answering everybody with `capacity`, `model_stamp`, `template_version` and MinDB's `kernel`, `goarch`
+and `fast_int8`. That is a free fingerprint — exact model, exact index capacity, the CPU feature the
+vector store compiled against — handed to anyone who asks, for the benefit of an operator who can
+already read all of it from inside the cluster. It is not a secret: this repo is public and every one
+of those values is in it. It is that an unauthenticated endpoint is a bad place to keep a manifest.
 
-**Options:** (a) an initContainer as 10001 for the checkpoint and the main container as 65532 for the
-snapshot; (b) `fsGroup: 10001` so the process is a member of the ingest's group; (c) write through a
-temporary file and rename, which is what the ingest already does.
+**Options:** (a) leave it; the repo is public anyway. (b) drop the detail entirely. (c) split it:
+liveness-grade facts always, stack detail only when `HEALTH_DETAIL` is set. (d) require a token on
+`/health`.
 
-**Choice:** (c), with the mode stated as 0644 rather than inherited. A rename asks the *directory* for
-permission, and `/corpus` is world-writable with no sticky bit, so this works at any uid and stops the
-manifest from encoding a uid relationship it would then have to maintain. The explicit mode is the
-other half of the same bug in mirror image: a checkpoint left at a default 0600 by 65532 is unreadable
-to the 10001 that resumes from it, so the next nightly would start from nothing on a full corpus — a
-worse failure than this one, and silent.
+**Choice:** (c), defaulting off. `status`, `corpus_size`, `dims`, `name_index_size` and `wal_healthy`
+stay unconditional, because those five are what `smoke.sh` fails a deploy on — an empty index, a
+dimension mismatch, a broken WAL — and a smoke test that cannot check those is not a smoke test. The
+rest merges in only behind the flag.
 
-**Trade-off:** it makes the three writes atomic, which a file whose whole purpose is to be trusted
-should have been from the start, and it costs a temporary file's worth of space next to each target.
-(a) needs the generation downloaded twice or handed between containers, and splits one verified write
-across two security contexts for no gain. (b) is pod-wide, so it would also re-group MinDB's own data
-volume as a side effect of restoring — fixing a permission problem by widening a different one.
-### D58 — The popularity scan pages, and renews the lease while it does
+**Trade-off:** `bench.latency` labels every run with the kernel it read from `/health` (D23,
+ADR-0006), and against the default it now has nothing to read. It refuses to run rather than printing
+`kernel=None`, which means benchmarking the live service takes a config change and a rollout. That is
+the right friction: an unlabelled latency number is the easiest dishonest thing in this project, and
+ADR-0006 exists because of it. (b) would have cost the same without leaving a way back. (d) adds the
+first credential in a service whose access control is deliberately reachability (D35), to protect data
+that is on GitHub. (a) is defensible and still wrong: `corpus_size` is the only field on that endpoint
+a stranger has any use for.
+
+### D57 — The popularity scan pages, and renews the lease while it does
 
 **Context:** the initial fill was applied with `--limit 180000` and finished in 33 minutes having
 ingested 1000 games. `fetch_popular` asked SteamSpy for `request=all` with `page: 0` and nothing else,
@@ -985,6 +959,34 @@ taken from a source that is already globally sorted. (c) is the cheapest and con
 1000 games is 0.6% of the catalogue, and the popular head is exactly where a recommender's near-misses
 are least forgivable.
 
+### D58 — A restore replaces the files it writes rather than overwriting them
+
+**Context:** the first in-cluster restore failed with `PermissionError: [Errno 13] Permission denied:
+'/corpus/checkpoint.json'`, seven minutes into a window I had predicted at ninety seconds. The Job runs
+as 65532 so that the snapshot it writes is owned by the process that loads it; the checkpoint it
+also writes lives in `/corpus`, which the ingest owns as 10001 at 0644. `write_bytes` opens the existing
+file, and 65532 may not. Nothing was lost — the checkpoint is written before the snapshot precisely so
+that dying here is the recoverable half — but the restore path had never run against a corpus that
+already had a checkpoint, which is why every local and k3d test passed: `/corpus` is world-writable, so
+*creating* the file works and only *replacing* it does not.
+
+**Options:** (a) an initContainer as 10001 for the checkpoint and the main container as 65532 for the
+snapshot; (b) `fsGroup: 10001` so the process is a member of the ingest's group; (c) write through a
+temporary file and rename, which is what the ingest already does.
+
+**Choice:** (c), with the mode stated as 0644 rather than inherited. A rename asks the *directory* for
+permission, and `/corpus` is world-writable with no sticky bit, so this works at any uid and stops the
+manifest from encoding a uid relationship it would then have to maintain. The explicit mode is the
+other half of the same bug in mirror image: a checkpoint left at a default 0600 by 65532 is unreadable
+to the 10001 that resumes from it, so the next nightly would start from nothing on a full corpus — a
+worse failure than this one, and silent.
+
+**Trade-off:** it makes the three writes atomic, which a file whose whole purpose is to be trusted
+should have been from the start, and it costs a temporary file's worth of space next to each target.
+(a) needs the generation downloaded twice or handed between containers, and splits one verified write
+across two security contexts for no gain. (b) is pod-wide, so it would also re-group MinDB's own data
+volume as a side effect of restoring — fixing a permission problem by widening a different one.
+
 ### D59 — The smoke test reads both shapes of /health, and is tested against both
 
 **Context:** D56 moved `wal_healthy` to the top level of `/health` and put the rest behind a flag.
@@ -1011,7 +1013,7 @@ WAL check is one of three things standing between a bad rollout and a green depl
 quietly removes it is not a fix. (c) is the correct answer for an API with consumers it does not
 control, and this endpoint has exactly one.
 
-### D60
+### D60 — A restore moves the replaced snapshot's write-ahead log aside
 
 **Context:** the first in-cluster restore that actually wrote anything (2026-09-29, after D58 fixed the
 permission that stopped the one before it) reported success in six seconds, and MinDB then refused to
@@ -1049,7 +1051,7 @@ correct when the operator remembers an undocumented step is not a procedure. (d)
 foundations: it would pair a log with a snapshot from a different run in the backup rather than on the
 disk, which is the same mismatch moved somewhere harder to see.
 
-### D61
+### D61 — The public router is rate-limited at the Ingress
 
 **Context:** the service is on a public URL meant to be handed to people, in front of a shared 2 vCPU
 VM that is also running MinDB, a nightly ingest and a multi-day fill. Nothing bounded what one client
@@ -1079,7 +1081,7 @@ yet hit. Global still bounds the total cost of abuse, which was the point. (e) w
 downstream of TLS termination and inside the process being protected -- the requests still arrive, still
 get parsed, and still occupy the loop; at the Ingress they are refused before they reach Python.
 
-### D62
+### D62 — Narration asks for low reasoning effort, and an empty reply is no narration
 
 **Context:** narration has been dead in production and nothing said so. `GROQ_MODEL` was
 `llama-3.3-70b-versatile`, which Groq has decommissioned; the endpoint answers 404 for a name it no
@@ -1111,7 +1113,7 @@ it silent is exactly what happened here, and the honest mitigation is not louder
 to tell the two apart from outside -- which `?narrate=true` already gives, for free, to anyone who
 thinks to ask. (c) treats the symptom: a bigger budget still ends up on reasoning, just later.
 
-### D63
+### D63 — A negated clause is cut out of the query and used to drop results
 
 **Context:** `"a open world boss fight game which is nothing like dark souls"` returned four Dark Souls
 titles in its top five, reported against the live service. The cause is not a bug in the query path --
@@ -1165,7 +1167,7 @@ This is mitigation, not a fix. A cue list is a list, so `"cozy farming, no comba
 unhandled, and nothing here gives the model an understanding of negation it does not have. The fix for
 that is a cross-encoder rerank, which is a different service and a different latency budget.
 
-### D64
+### D64 — The page reads /health defensively and blames the service only for a failed fetch
 
 **Context:** the page reported "The service is not answering /health." while `/livez`, `/readyz` and
 `/health` all answered 200 in under half a second. The banner rendered

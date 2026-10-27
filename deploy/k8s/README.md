@@ -6,7 +6,7 @@ deployment is readable in one sitting, which is the point.
 ```
                           ┌──────────────────────────┐
    Ingress or             │  Service gamerec-api     │   Traefik terminates TLS on the VM
-   kubectl port-forward   │  (2 replicas, rolling)   │   (50-ingress.yaml); port-forward
+   kubectl port-forward   │  (1 replica, rolling)    │   (50-ingress.yaml); port-forward
    ──────────────────────▶└────────┬────────┬────────┘   is how k3d reaches it
                                    │        │ reads /corpus (ro)
                           gRPC :50051       │
@@ -36,7 +36,7 @@ deployment is readable in one sitting, which is the point.
 | `25-mindb-netpol.yaml` | MinDB has no auth, so reachability is the access control |
 | `30-api.yaml` | the API Deployment and Service |
 | `40-ingest.yaml` | the nightly ingest CronJob |
-| `50-ingress.yaml` | the only thing reachable from outside; the hostname is a placeholder |
+| `50-ingress.yaml` | the only thing reachable from outside: TLS, the http redirect, rate limits |
 | `manual/` | one-off Jobs and the Secret example — deliberately **not** applied by `-f deploy/k8s/` |
 
 The numeric prefixes exist because `kubectl apply -f deploy/k8s/` applies files in name order, and the
@@ -104,8 +104,9 @@ about rather than exercised.
   credentials -- and it failed, which is the point of doing it. A wrong bucket name made the sidecar
   crash-loop, and because a pod is Ready only when every container is ready, that dropped MinDB out
   of its Service and took the API down with it. The fix is D49 and the story is in
-  [../../docs/failure-modes.md](../../docs/failure-modes.md). A generation now lands in R2 from the
-  cluster; restoring one in-cluster is still only k3d-tested.
+  [../../docs/failure-modes.md](../../docs/failure-modes.md). Generations land in R2 from the
+  cluster, and one was restored in-cluster on 2026-09-29 -- at the third attempt, which is D58 and
+  D60.
 - **More than one node.** The corpus PVC is `ReadWriteOnce`, and the API and ingest share it only
   because every pod lands on the same node. A second node breaks that, and the fix is R2 rather than
   a fight with `ReadWriteMany`.
