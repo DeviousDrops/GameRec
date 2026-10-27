@@ -112,6 +112,15 @@ class NameIndex:
         NameIndex.dump(list(merged.values()), path)
         return len(merged)
 
+    @staticmethod
+    def appids_with(path: Path, status: str) -> set[int]:
+        """Every appid the file on disk holds at `status`; empty when there is no file yet."""
+        try:
+            raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return set()
+        return {int(e["appid"]) for e in raw if e["status"] == status}
+
     def __len__(self) -> int:
         return len(self._by_appid)
 

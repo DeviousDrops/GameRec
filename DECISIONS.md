@@ -1200,3 +1200,37 @@ The general lesson is worth stating because it will recur: narrowing what an end
 whoever was reading the part that went away, silently, and the first report blames the service. Nothing
 in CI could have caught it, because nothing in CI loads the page against a response shaped the way
 production shapes it -- which is why the new test compares the two directly.
+
+### D65 — The nightly scans the whole catalogue, promotes, and rotates its refreshes
+
+**Context:** a month after the initial fill, the corpus held 30,509 games and had not grown by one.
+The nightly CronJob ran every night, reported success, fetched 500 games, and added nothing. Three
+things combined. It asked SteamSpy for the top 2,000 games by review count, all of which the fill had
+ingested on day one, so "new appids first" had no new appids to put first: a release only reaches
+that list once it has thousands of reviews. Its refresh cap then took the first 500 of those in
+popularity order, which is the same 500 every night. And a game filtered for having fewer than 50
+reviews went into the checkpoint as seen, permanently, although review counts only ever grow. Each of
+those refreshes appended a line, so `documents.jsonl` had reached 45,846 lines for 30,509 games.
+
+The fill itself was not short. SteamSpy's `request=all` ends at page 86 with 82,506 apps, not the
+~285 pages the research estimated from Steam's own 285,388 store products. 51,850 of those are under
+the review floor and 147 are not games, which leaves exactly the 30,509 in the corpus. The Scope
+Filter (D4) working as designed produces about 30k games, not 177k.
+
+**Options:** (a) keep a top-N limit and raise N; (b) scan the whole SteamSpy list every night, treat
+filtered games now over the floor as new, and rotate refreshes through the corpus by appid with a
+cursor in the checkpoint; (c) switch discovery to `IStoreService/GetAppList` with `if_modified_since`,
+which is what D15 originally assumed.
+
+**Choice:** (b), plus compacting `documents.jsonl` at the end of a run once shadowed lines are a third
+of it. The cursor is `refresh_after` in the checkpoint; a checkpoint written before it existed reads
+as 0, which starts the rotation at the beginning.
+
+**Trade-off:** a nightly now spends ~87 minutes on SteamSpy's one-request-a-minute pages before it
+fetches anything, so the run is about two hours instead of seventeen minutes -- inside its six-hour
+deadline, and 87 requests a day against a source that refreshes daily. (a) shrinks the gap without
+closing it: a new game below the cutoff is still invisible, and refreshes still repeat a head. (c) is
+the better source -- real deltas, and Steam's own catalogue rather than a hobby project's -- and needs
+a Steam Web API key this deployment does not have; it remains the way to reach the ~95k games SteamSpy
+does not list, nearly all of them under any review floor worth having. 500 refreshes a night walks a
+30k corpus in about two months, which is how stale a description can get before it is fetched again.

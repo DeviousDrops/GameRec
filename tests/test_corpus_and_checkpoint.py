@@ -117,6 +117,19 @@ def test_the_watermark_only_advances_on_complete(tmp_path):
     assert Checkpoint.load(path).watermark != ""
 
 
+def test_the_refresh_cursor_survives_a_round_trip(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    checkpoint = Checkpoint("model/384", 1, refresh_after=413150)
+    checkpoint.save(path, COMPLETE)
+    assert Checkpoint.load(path).refresh_after == 413150
+
+
+def test_a_checkpoint_from_before_the_cursor_starts_the_rotation_at_zero(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text('{"model_stamp": "m", "template_version": 1, "status": "complete"}')
+    assert Checkpoint.load(path).refresh_after == 0
+
+
 def test_saving_leaves_no_temp_file_behind(tmp_path):
     path = tmp_path / "checkpoint.json"
     Checkpoint("model/384", 1).save(path, COMPLETE)

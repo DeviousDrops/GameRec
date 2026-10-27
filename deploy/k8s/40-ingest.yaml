@@ -49,9 +49,12 @@ spec:
               image: ghcr.io/deviousdrops/gamerec-api:0.1.6
               imagePullPolicy: IfNotPresent
               command: ["python", "-m", "ingest.run"]
-              # 2,000 candidates a night: enough to absorb new releases and a share of refreshes,
-              # small enough that a run fits its window at 35 requests a minute (D17).
-              args: ["--limit", "2000"]
+              # The whole SteamSpy catalogue, every night. It was 2,000, which is the 2,000 most
+              # reviewed games -- all ingested on day one -- so a night found nothing new: a release
+              # reaches the head of that list only after it has thousands of reviews. The scan is
+              # ~87 pages at SteamSpy's documented one a minute, then the new games, the ones that
+              # have passed the review floor, and 500 rotating refreshes (D65). About two hours.
+              args: ["--limit", "180000"]
               envFrom:
                 - configMapRef:
                     name: gamerec-config
