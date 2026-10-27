@@ -1,0 +1,105 @@
+# library-service itself: a Deployment of two, and a ClusterIP Service in front of them.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: library-service
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/name: library-service
+    app.kubernetes.io/part-of: gamerec
+spec:
+  # Two, so a rolling update or one pod dying never leaves the Service with no endpoints. The service
+  # keeps no state of its own -- everything is in Postgres -- which is what makes two copies safe.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: library-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: library-service
+        app.kubernetes.io/part-of: gamerec
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001        # the uid the Dockerfile creates
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          # A release tag, never latest, so the manifest says exactly what is deployed.
+          image: ghcr.io/deviousdrops/library-service:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: library-service-config
+            - secretRef:
+                name: library-service-secrets
+          # The JVM, Spring and Flyway take ~10-20s to start. Until this passes, the other two probes
+          # are not run, so a slow start is never mistaken for a hung process.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 3
+            failureThreshold: 40
+          # Is the process alive? Never touches the database, so a Postgres outage does not get every
+          # pod restarted for nothing.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          # Can it serve? Includes the database (application.yml), so a pod that cannot reach
+          # Postgres leaves the Service until it can.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+          resources:
+            # Measured at 277-289 MB resident per pod, idle, on a local cluster. The limit is what
+            # the JVM sizes its heap from (MaxRAMPercentage=50 in the Dockerfile), so it is the number
+            # that matters.
+            requests:
+              memory: 320Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # Tomcat writes its work files to /tmp, and the root filesystem is read-only.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ClusterIP: reachable only from inside the cluster, which is the only place it is called from.
+apiVersion: v1
+kind: Service
+metadata:
+  name: library-service
+  namespace: gamerec
+  labels:
+    app.kubernetes.io/name: library-service
+    app.kubernetes.io/part-of: gamerec
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: library-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
