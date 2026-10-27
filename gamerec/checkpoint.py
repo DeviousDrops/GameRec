@@ -42,6 +42,9 @@ class Checkpoint:
     # Advanced only once a batch is snapshotted (D15), so it can never claim more than is durable.
     watermark: str = ""
     updated_at: str = ""
+    # Where the refresh rotation stopped: the next run refreshes appids above this one first, so
+    # the cap walks the whole corpus instead of re-fetching the same most-reviewed games (D65).
+    refresh_after: int = 0
 
     @classmethod
     def load(cls, path: Path) -> "Checkpoint | None":
@@ -67,6 +70,7 @@ class Checkpoint:
             appids=set(raw.get("appids", [])),
             watermark=raw.get("watermark", ""),
             updated_at=raw.get("updated_at", ""),
+            refresh_after=int(raw.get("refresh_after", 0)),
         )
 
     def save(self, path: Path, status: str) -> None:
@@ -86,6 +90,7 @@ class Checkpoint:
                     "appids": sorted(self.appids),
                     "watermark": self.watermark,
                     "updated_at": self.updated_at,
+                    "refresh_after": self.refresh_after,
                 },
                 separators=(",", ":"),
             ),

@@ -17,6 +17,7 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      # ~177k documents at roughly 1 KB each, with room for the append-only history between
-      # compactions (D9).
+      # ~30k documents at roughly 0.5 KB each and a name index of ~82k entries -- tens of MB, so
+      # this is generous. The room is for the append-only history between compactions (D9, D65)
+      # and for a lower review floor, which would multiply the corpus rather than add to it.
       storage: 5Gi

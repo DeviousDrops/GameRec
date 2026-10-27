@@ -8,7 +8,7 @@ Steam knows about rather than only what made it into the corpus. That is what le
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import re
@@ -22,6 +22,13 @@ NOT_A_GAME = "not_a_game"
 PENDING_INGEST = "pending_ingest"
 
 MATCH_THRESHOLD = 90
+
+# How close a name has to be to be offered as "did you mean" when nothing reached MATCH_THRESHOLD
+# (ADR-0004). Lower than the threshold by design: a suggestion is shown to a person who decides, a
+# match is acted on silently. "stardw valy" scores 88 against Stardew Valley and "DARK SOULS 2" 86
+# against the full Scholar of the First Sin title; unrelated games sit far below 80.
+SUGGESTION_THRESHOLD = 80
+MAX_SUGGESTIONS = 3
 
 # rapidfuzz does no normalisation unless asked. Without this, "stardew valley" scores 85.7 against
 # "Stardew Valley" and "half life 2" scores 72.7 against "Half-Life 2" -- both rejected by the 90
@@ -68,6 +75,7 @@ class NameEntry:
 class Resolution:
     entry: NameEntry | None
     reason: str | None = None
+    suggestions: list[str] = field(default_factory=list)
 
     @property
     def usable(self) -> bool:
@@ -78,6 +86,9 @@ class NameIndex:
     def __init__(self, entries: list[NameEntry]) -> None:
         self._by_appid = {e.appid: e for e in entries}
         self._choices = {e.appid: e.name for e in entries}
+        # Suggestions come only from games that can actually be recommended: offering one that is
+        # filtered would answer a 404 with a name that 404s too.
+        self._usable = {e.appid: e.name for e in entries if e.status == IN_CORPUS}
 
     @classmethod
     def load(cls, path: Path) -> "NameIndex":
@@ -112,6 +123,15 @@ class NameIndex:
         NameIndex.dump(list(merged.values()), path)
         return len(merged)
 
+    @staticmethod
+    def appids_with(path: Path, status: str) -> set[int]:
+        """Every appid the file on disk holds at `status`; empty when there is no file yet."""
+        try:
+            raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return set()
+        return {int(e["appid"]) for e in raw if e["status"] == status}
+
     def __len__(self) -> int:
         return len(self._by_appid)
 
@@ -134,14 +154,31 @@ class NameIndex:
             )
             match = next((c for c in candidates if _sequel_markers(c[0]) == wanted), None)
             if match is None:
-                if candidates:
+                if candidates and wanted:
+                    # A sequel number that exists nowhere: "Half-Life 3" is not a typo of anything,
+                    # and offering Half-Life as a correction would be the silent downgrade D26 forbids.
                     near = self._by_appid[candidates[0][2]].name
                     return Resolution(
                         None, f"no game named {seed!r} -- the closest is {near}, which is not the same game"
                     )
+                suggestions = self._suggest(seed, wanted)
+                if suggestions:
+                    return Resolution(None, f"no game named {seed!r} -- did you mean "
+                                            f"{_either(suggestions)}?", suggestions)
                 return Resolution(None, f"no game named {seed!r} (needs a {MATCH_THRESHOLD}% match)")
             entry = self._by_appid[match[2]]
 
         if entry.status == IN_CORPUS:
             return Resolution(entry)
         return Resolution(entry, f"{entry.name} is known, but {_EXPLANATIONS[entry.status]}")
+
+    def _suggest(self, seed: str, wanted: frozenset[str]) -> list[str]:
+        """Recommendable names close to `seed`, the ones whose sequel number agrees listed first."""
+        near = process.extract(seed, self._usable, scorer=fuzz.WRatio, processor=_PROCESSOR,
+                               score_cutoff=SUGGESTION_THRESHOLD, limit=MAX_SUGGESTIONS)
+        near.sort(key=lambda c: (_sequel_markers(c[0]) != wanted, -c[1]))
+        return [name for name, _score, _appid in near]
+
+
+def _either(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"

@@ -88,9 +88,13 @@ design, so `exec ... mv` answers `Read-only file system`. Either re-run the rest
 retires the log, or move the file on the node -- the claim is local-path storage:
 
 ```
-sudo mv /var/lib/rancher/k3s/storage/pvc-*_gamerec_mindb-data/mindb.snap.wal.??????         /var/lib/rancher/k3s/storage/pvc-*_gamerec_mindb-data/orphaned-wal.bak
-sudo kubectl -n gamerec delete pod -l app.kubernetes.io/name=mindb
+cd /var/lib/rancher/k3s/storage/pvc-*_gamerec_mindb-data/
+for f in mindb.snap.wal.??????; do sudo mv "$f" "orphaned-$f"; done
+sudo k3s kubectl -n gamerec delete pod -l app.kubernetes.io/name=mindb
 ```
+
+The `orphaned-` prefix is the same one `ops.restore` uses, and it is what takes a segment out of the
+`mindb.snap.wal.??????` glob MinDB boots from.
 
 ## A backup generation is incomplete or corrupt
 
@@ -153,38 +157,73 @@ behaviour   the run finishes with fewer documents; the checkpoint still complete
 recovery    none; the next nightly run retries exactly those appids
 ```
 
-A fetch that never got an answer is recorded `PENDING_INGEST`, not `NOT_A_GAME` (ADR-0005). The
+A fetch that never got an answer is recorded `PENDING_INGEST`, not `NOT_A_GAME` (D32). The
 distinction matters because `NOT_A_GAME` is permanent and would bury the game forever, while
 `PENDING_INGEST` is retried. A 429 costs a 20-30 s backoff, which is why the configured pace sits
 under Steam's measured ceiling rather than at it.
 
 ## The embedding model or the render template changes
 
-*Exercised: a bumped `TEMPLATE_VERSION` against an existing checkpoint.*
+*Exercised: a bumped `TEMPLATE_VERSION` against an existing checkpoint. The model half is reasoned
+from the code and pinned by `tests/test_stamp.py`.*
+
+The two are handled differently on purpose (D31):
 
 ```
-symptom     ingest exits 1 before fetching anything, logging both stamps
-behaviour   no vectors are written, so the index never mixes two embedding spaces
+model       ingest exits 1 before fetching anything, logging both stamps and naming
+            python -m ingest.reindex; no vectors are written
+template    ingest logs a warning and carries on; /recommend reports template_version per
+            result, so the mix is visible rather than hidden (D22)
 recovery    python -m ingest.reindex, which re-embeds every document at the new stamp
 ```
 
-A refusal rather than a migration, because a half-migrated index returns confidently wrong
-neighbours and there is no way to tell from a vector which model produced it. Every payload carries
-its stamp, which is what makes the mismatch detectable at all (D11).
+A model change is a refusal rather than a migration, because a half-migrated index returns
+confidently wrong neighbours and there is no way to tell from a vector which model produced it. A
+template change is not, because both versions live in the same vector space and D22 plans for a
+corpus that holds both while it catches up. Every payload carries its stamp, which is what makes
+either detectable at all (D31).
 
 ## The ingest lease is lost mid-run
 
 *Exercised: expired a lease under a running holder against moto -- `renew()` returned False.*
 
 ```
-symptom     ingest logs "lost the ingest lease mid-run; stopping after this batch", exits 1
-behaviour   it stops at a batch boundary, after a snapshot, with the checkpoint pending
-recovery    none; the next run resumes from the checkpoint
+symptom     ingest logs "lost the ingest lease mid-run; stopping after this batch", then its
+            final snapshot, and exits 0
+behaviour   it stops fetching at a batch boundary, snapshots what it has, and marks the
+            checkpoint complete for the appids it actually finished
+recovery    none; the next run picks up whatever this one did not reach
 ```
 
 Stopping at a boundary is why this is cheap: a batch ends with durable state, so a lease lost there
-costs nothing that is not already on disk. A second holder failing to acquire the lease exits
+costs nothing that is not already on disk, and the snapshot that follows makes no Steam requests at
+all. The skipped targets are simply still unseen. A second holder failing to acquire the lease exits
 **0**, not 1 -- the lease working as intended should not page anyone.
+
+## The nightly ingest succeeds and adds nothing
+
+*Exercised, unintentionally, for a month: every nightly from 2026-09-29 to 2026-10-27 completed in
+seventeen minutes and the corpus stayed at 30,509 games (D65).*
+
+```
+symptom     the CronJob is green every night; corpus_size on /health never moves
+            the log says "2000 candidates, 500 to fetch this run (82506 already seen)"
+            documents.jsonl grows by 500 lines a night while unique appids stay flat
+behaviour   every candidate was already seen, so the budget went on refreshing the same games
+recovery    a release with D65: the nightly scans the whole catalogue and rotates refreshes
+```
+
+Nothing failed, which is what made it last. The question to ask of a nightly is not whether it
+succeeded but what it added, and the log answers it in one line:
+
+```
+sudo k3s kubectl -n gamerec logs job/<newest gamerec-ingest job> | grep -E "candidates|passed the review floor|corpus holds"
+```
+
+A healthy run after D65 shows the full catalogue as candidates (~82k), a handful of new appids
+ahead of the 500 refreshes, and some games passing the review floor. A corpus that is not growing is
+not necessarily broken either -- the Scope Filter (D4) admits ~30k of SteamSpy's ~82k apps, so the
+corpus grows by new releases that reach 50 reviews, which is tens a week, not thousands.
 
 ## The ingest is OOM-killed
 

@@ -22,3 +22,14 @@ first page skips that phase, which is the cheap way to get a useful corpus quick
 Fill order is by third-party popularity estimates, so the most-wanted games are searchable within hours
 rather than days. Those estimates order the work and never become data. The partial-corpus week is a
 documented property of a fresh deployment, not a bug to be explained away when recommendations are thin.
+
+## Update, 2026-10-27 — the fill ran, and the hand-off had a gap
+
+The fill finished in 17 hours, not six days. SteamSpy's list ends at 82,506 apps rather than the
+~177,000 games Steam's store counts, and the Scope Filter admits 30,509 of them without a request for
+the other 51,997, so far fewer `appdetails` calls were needed than the estimate above assumed.
+
+The hand-off to the nightly CronJob happened and did nothing for a month: the nightly considered only
+the 2,000 most-reviewed games, all already ingested, so it never found a new one. D65 has the nightly
+scan the whole list each night instead, which makes the fill a one-off in fact as well as in intent --
+it is needed again only for an empty corpus or a large drop in the review floor.

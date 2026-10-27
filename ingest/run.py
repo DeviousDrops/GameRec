@@ -10,6 +10,7 @@ Hardened per Phase 2. The properties that hold, and why each one is load-bearing
                    budget rather than a hope (D17).
     bounded        New appids first, then refreshes up to max_updates_per_run. Without the cap a big
                    Steam change day starves out new games, which is what users actually notice (D15).
+                   The refreshes rotate through the corpus rather than repeating its head (D65).
     honest         The checkpoint is marked complete only after Snapshot succeeds, so a restore never
                    pairs a snapshot with a checkpoint claiming more than it holds (ADR-0002).
 
@@ -28,6 +29,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from dataclasses import dataclass
 
 import httpx
 
@@ -51,20 +53,59 @@ log = logging.getLogger("ingest")
 
 BATCH_SIZE = 200  # ~200 x 384 float32 is well under MinDB's ~4 MiB message cap.
 
+# Compact documents.jsonl once shadowed lines are a third of it. Rewriting 30k documents takes
+# seconds, so this is about not rewriting the source of truth every night for a handful of lines.
+COMPACT_RATIO = 1.5
 
-def plan(candidates: list[Popular], seen: set[int], max_updates: int) -> list[Popular]:
-    """New appids first, then refreshes of ones already seen, capped (D15).
+
+@dataclass
+class Plan:
+    targets: list[Popular]
+    # Where the refresh rotation got to, for the next run to start after (D65).
+    refresh_after: int
+
+
+def plan(
+    candidates: list[Popular],
+    seen: set[int],
+    max_updates: int,
+    documented: set[int] | None = None,
+    below_floor: set[int] = frozenset(),
+    review_floor: int = 0,
+    refresh_after: int = 0,
+) -> Plan:
+    """New appids first, then refreshes of games in the corpus, capped and rotating (D15, D65).
 
     The order matters more than the cap does. A run that spends its budget refreshing games already
     in the corpus looks busy and adds nothing anyone asked for.
+
+    Three kinds of candidate, in this order:
+
+        new        never seen, or seen and left unresolved because Steam did not answer
+        promoted   filtered for too few reviews once, and over the floor now -- a verdict that
+                   expires, because review counts only ever grow
+        refresh    already a document, taken in appid order starting after `refresh_after` and
+                   wrapping, so the cap walks the whole corpus over successive nights
+
+    Rotation is the part that was missing. Taking the first `max_updates` in popularity order meant
+    every night refreshed the same 500 most-reviewed games and nothing else, forever.
     """
-    fresh = [c for c in candidates if c.appid not in seen]
-    stale = [c for c in candidates if c.appid in seen]
-    if len(stale) > max_updates:
-        log.info("deferring %d refreshes to the next run (cap %d)",
-                 len(stale) - max_updates, max_updates)
-        stale = stale[:max_updates]
-    return fresh + stale
+    documented = seen if documented is None else documented
+    fresh = [c for c in candidates
+             if c.appid not in seen
+             or (c.appid in below_floor and c.review_count >= review_floor)]
+    promoted = sum(1 for c in fresh if c.appid in seen)
+    stale = sorted((c for c in candidates if c.appid in documented and c.appid not in below_floor),
+                   key=lambda c: c.appid)
+    rotated = [c for c in stale if c.appid > refresh_after] + \
+              [c for c in stale if c.appid <= refresh_after]
+    refresh = rotated[:max_updates]
+    if len(rotated) > max_updates:
+        log.info("deferring %d refreshes to later runs (cap %d)",
+                 len(rotated) - max_updates, max_updates)
+    if promoted:
+        log.info("%d games have passed the review floor since they were filtered", promoted)
+    return Plan(fresh + refresh, refresh[-1].appid if refresh else refresh_after)
 
 
 def fetch_one(
@@ -175,7 +216,14 @@ def _run(args, config, embedder, current, recorded, lease) -> int:
     # longest single phase of a fill, and nothing else touches the lease until the first batch ends
     # (D57).
     candidates = fetch_popular(args.limit, on_page=lease.renew if lease is not None else None)
-    targets = plan(candidates, checkpoint.appids, config.max_updates_per_run)
+    planned = plan(
+        candidates, checkpoint.appids, config.max_updates_per_run,
+        documented=store.appids(),
+        below_floor=NameIndex.appids_with(config.names_path, FILTERED_LOW_REVIEWS),
+        review_floor=config.review_floor,
+        refresh_after=checkpoint.refresh_after,
+    )
+    targets = planned.targets
     log.info("%d candidates, %d to fetch this run (%d already seen)",
              len(candidates), len(targets), len(checkpoint.appids))
 
@@ -229,9 +277,18 @@ def _run(args, config, embedder, current, recorded, lease) -> int:
         client.close()
         return 1
 
+    checkpoint.refresh_after = planned.refresh_after
     checkpoint.mark_complete(config.checkpoint_path)
+
+    # Every refresh appends a line that shadows an older one, so a corpus whose games are all
+    # refreshed in rotation grows by the refresh cap every night while holding the same documents.
+    # Compacted here, after the run and before the corpus is pushed to R2, never in the middle (D65).
+    lines, unique = store.line_count(), len(store.appids())
+    if lines > unique * COMPACT_RATIO:
+        store.compact()
+
     log.info("corpus holds %d documents, %d vectors; checkpoint covers %d appids",
-             store.line_count(), client.stats().vector_count, len(checkpoint.appids))
+             len(store.appids()), client.stats().vector_count, len(checkpoint.appids))
     client.close()
     return 0
 

@@ -17,11 +17,13 @@ import argparse
 import logging
 import sys
 
+from gamerec import objectstore
 from gamerec.checkpoint import Checkpoint
 from gamerec.config import Config
 from gamerec.corpus import CorpusStore
 from gamerec.documents import TEMPLATE_VERSION
 from gamerec.embeddings import Embedder
+from gamerec.lease import LeaseHeld, acquire
 from gamerec.mindb import MinDBClient
 
 log = logging.getLogger("reindex")
@@ -40,6 +42,26 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     config = Config()
+
+    # The same lease the ingest holds. A reindex makes no Steam requests, so pacing is not the reason;
+    # the checkpoint is. Both write it, and an ingest finishing beside a reindex would leave a
+    # checkpoint stamped by whichever wrote last (D66).
+    store_r2 = objectstore.from_config(config)
+    if store_r2 is None:
+        log.warning("no object storage configured: reindexing without the ingest lease")
+        return _reindex(args, config)
+    try:
+        lease = acquire(store_r2, ttl=config.ingest_lease_ttl)
+    except LeaseHeld as held:
+        log.error("%s", held)
+        return 1
+    try:
+        return _reindex(args, config, lease)
+    finally:
+        lease.release()
+
+
+def _reindex(args, config, lease=None) -> int:
     store = CorpusStore(config.documents_path)
 
     if args.compact:
@@ -66,9 +88,16 @@ def main() -> int:
                   "larger -capacity (D21)", stats.capacity, len(documents))
         return 1
 
-    # The old checkpoint describes a corpus that is about to stop existing, so it is replaced
-    # wholesale rather than merged: a reindex touches every appid by definition.
+    # A new checkpoint, because it carries the new stamp -- but it inherits the old one's appids and
+    # refresh cursor. Most of what a checkpoint has seen has no document: on the live corpus 51,850
+    # games filtered for too few reviews and 147 that are not games, against 30,509 documents. Those
+    # verdicts do not depend on the model, and dropping them would hand the next ingest every one of
+    # them to look at again (D66).
+    previous = Checkpoint.load(config.checkpoint_path)
     checkpoint = Checkpoint(embedder.model_stamp, TEMPLATE_VERSION)
+    if previous is not None:
+        checkpoint.appids = set(previous.appids)
+        checkpoint.refresh_after = previous.refresh_after
     inserted = 0
     for batch_number, start in enumerate(range(0, len(documents), BATCH_SIZE), start=1):
         batch = documents[start : start + BATCH_SIZE]
@@ -83,6 +112,13 @@ def main() -> int:
             checkpoint.mark_pending(config.checkpoint_path, {d.appid for d in done})
             ok, message = client.snapshot()
             log.info("snapshot ok=%s %s", ok, message)
+
+        # ~13 documents a second on the VM puts a 30k-document reindex at ~40 minutes, past the
+        # lease's 30-minute TTL, so it renews per batch the way the ingest does.
+        if lease is not None and not lease.renew():
+            log.error("lost the ingest lease mid-reindex; stopping with the checkpoint pending")
+            client.close()
+            return 1
 
     checkpoint.mark_pending(config.checkpoint_path, {d.appid for d in documents})
     ok, message = client.snapshot()
