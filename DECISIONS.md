@@ -1234,3 +1234,22 @@ the better source -- real deltas, and Steam's own catalogue rather than a hobby 
 a Steam Web API key this deployment does not have; it remains the way to reach the ~95k games SteamSpy
 does not list, nearly all of them under any review floor worth having. 500 refreshes a night walks a
 30k corpus in about two months, which is how stale a description can get before it is fetched again.
+
+### D66 — A reindex keeps the checkpoint's verdicts and holds the ingest lease
+
+**Context:** `ingest.reindex` replaced the checkpoint with one listing only the appids it had
+documents for, on the reasoning that a reindex touches every appid. It touches every *document*.
+On the live corpus the checkpoint covers 82,506 appids and 30,509 of them have documents; the other
+51,997 are verdicts -- too few reviews, or not a game -- that the model has nothing to do with. It also
+ran without the Ingest Lease, although it writes the same checkpoint the ingest does.
+**Options:** (a) leave both; the filtered appids cost no request to rediscover, since SteamSpy supplies
+the review count; (b) carry the old checkpoint's appids and refresh cursor into the new one, and take
+the lease for the duration; (c) take the lease only.
+**Choice:** (b). The lease is renewed per batch, because a 30k-document reindex runs ~40 minutes on
+the VM and the TTL is 30.
+**Trade-off:** (a) is cheaper than it sounds for the filtered games and not for the 147 that are not
+games, which would each cost an appdetails request to be told no again -- and with the rotation in
+D65 the cursor would reset too. The lease makes a reindex refuse to start while a nightly is running,
+which is a two-hour wait on a bad night; that is the correct answer, since the alternative is a
+checkpoint stamped by whichever process wrote last. `manual/reindex.yaml` now mounts the Secret so the
+lease is reachable from the cluster at all.

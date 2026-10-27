@@ -43,6 +43,11 @@ spec:
           envFrom:
             - configMapRef:
                 name: gamerec-config
+            # For the ingest lease, which a reindex holds because it writes the checkpoint (D66).
+            # Without it the reindex says so and runs unguarded.
+            - secretRef:
+                name: gamerec-secrets
+                optional: true
           resources:
             requests:
               memory: 600Mi
