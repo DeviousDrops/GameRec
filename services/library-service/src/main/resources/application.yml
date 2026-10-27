@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: library-service
+
+  # No defaults on purpose. A missing variable fails startup with the placeholder's name in the
+  # error, which is better than a service that comes up pointed at a database nobody meant.
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+
+  jpa:
+    # Flyway creates the schema; Hibernate only checks that the entities match it, and refuses to
+    # start if they do not.
+    hibernate:
+      ddl-auto: validate
+    # Off: no lazy loading during JSON rendering, so every query runs inside the service layer.
+    open-in-view: false
+
+server:
+  port: 8080
+  # Finish in-flight requests on SIGTERM instead of dropping them, which is what a rolling update sends.
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      # /actuator/health/liveness and /actuator/health/readiness, for the Kubernetes probes.
+      probes:
+        enabled: true
+      # Readiness includes the database, so a pod that cannot reach Postgres leaves the Service.
+      # Liveness deliberately does not: a database outage must not get every pod restarted, which
+      # would fix nothing (the same rule as GameRec's /livez, D34).
+      group:
+        readiness:
+          include: readinessState, db
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
