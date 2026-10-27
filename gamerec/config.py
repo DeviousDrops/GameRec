@@ -24,6 +24,9 @@ class Config:
     # llama-3.3-70b-versatile until 2026-09-29, when it turned out to have been decommissioned:
     # the endpoint answers 404, narration fails open, and nothing anywhere said so (D62).
     groq_model: str = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
+    # library-service, which knows what each user owns (D67). Empty means not deployed: a `user`
+    # on /recommend is then ignored rather than costing a timeout on every request.
+    library_url: str = os.environ.get("LIBRARY_URL", "")
 
     # Ingest pacing. 35/min against Steam's ~40/min refill is the measured default from D17 --
     # deliberately under the ceiling, because the penalty for guessing high is a 429 that costs a

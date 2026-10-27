@@ -1,0 +1,2 @@
+# Maven output. Everything the build produces lands here.
+target/

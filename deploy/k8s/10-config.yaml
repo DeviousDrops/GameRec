@@ -20,6 +20,11 @@ data:
   #     httpx.get("https://api.groq.com/openai/v1/models", headers={"Authorization":"Bearer "+os.environ["GROQ_API_KEY"]}).json()["data"]])'
   GROQ_MODEL: "openai/gpt-oss-20b"
 
+  # library-service, which knows what each user owns (D67). Empty until it is deployed from
+  # services/library-service/k8s/, and then "http://library-service:8080". While empty, a `user` on
+  # /recommend is ignored rather than spending a 300 ms timeout on a service that is not there.
+  LIBRARY_URL: ""
+
   # Whether /health names the stack -- kernel, architecture, capacity, model -- on top of saying
   # whether it works. Off, because this API answers the open internet and that block is a free
   # fingerprint; an operator reads the same thing from inside the cluster. Flip it to "true" and
