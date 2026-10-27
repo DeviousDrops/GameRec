@@ -21,3 +21,5 @@ __pycache__/
 venv/
 Claude outputs/
 scratchpad/
+# Other services in this repo build their own images from their own directories.
+services/
