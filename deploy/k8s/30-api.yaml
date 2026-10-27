@@ -41,7 +41,7 @@ spec:
           # Built from deploy/api.Dockerfile and published by release.yml on a version tag. A tag is
           # never rewritten, so IfNotPresent pulls each one exactly once; on k3d the same tag can be
           # imported by hand instead.
-          image: ghcr.io/deviousdrops/gamerec-api:0.1.6
+          image: ghcr.io/deviousdrops/gamerec-api:0.1.7
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
